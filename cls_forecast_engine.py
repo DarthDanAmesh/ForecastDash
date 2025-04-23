@@ -23,7 +23,7 @@ class ForecastEngine:
         return df
 
     @staticmethod
-    def forecast_xgboost(model, last_known_values, periods, last_date, freq='M'):
+    def forecast_xgboost(model, last_known_values, periods, last_date, freq='ME'):
         future_dates = pd.date_range(
             start=last_date + pd.Timedelta(days=1),
             periods=periods,

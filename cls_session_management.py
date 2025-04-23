@@ -8,6 +8,7 @@ class SessionState:
         self.connection_string = None
         self.uploaded_file = None
         self.api_config = None
+        self.data_fingerprints = {}
 
     def reset(self):
         self.data = None

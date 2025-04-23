@@ -2,7 +2,7 @@ import streamlit as st
 
 def show_data_source_selection():
     with st.sidebar:
-        st.markdown("### 🗂️ Configure Data Source")
+        st.markdown("### Configure Data Source")
 
         data_source = st.radio("Choose how to load data:", 
                                ["📁 CSV Upload", "🗄️ Database", "🌐 API"],

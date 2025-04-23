@@ -29,6 +29,16 @@ def show_model_training():
                                         key="training_forecast_period_input")
     test_size = st.slider("Test Size Percentage", 10, 40, 20)
 
+    # Add cache control
+    use_cache = st.checkbox("Use model caching", value=True)
+    
+    # Create config dictionary for fingerprint
+    config = {
+        "model_type": model_type,
+        "test_size": test_size,
+        "forecast_period": forecast_period
+    }
+
     if st.button("Train Model"):
         with st.spinner("Training model..."):
 
@@ -40,7 +50,7 @@ def show_model_training():
                 X_train, X_test, y_train, y_test = train_test_split(
                     X, y, test_size=test_size/100, shuffle=False)
 
-                model = ModelTrainer.train_xgboost(X_train, y_train)
+                model = ModelTrainer.train_xgboost(X_train, y_train, use_cache=use_cache, config=config)
                 evaluation = ModelTrainer.evaluate_model(model, X_test, y_test)
 
                 last_values = X.iloc[-1].values
