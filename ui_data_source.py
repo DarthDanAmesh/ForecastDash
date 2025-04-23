@@ -1,36 +1,50 @@
 import streamlit as st
 
-# UI Components
 def show_data_source_selection():
-    st.sidebar.header("Data Source Configuration")
-    data_source = st.sidebar.radio("Select Data Source", 
-                                  ["CSV Upload", "Database", "API"])
-    
-    if data_source == "CSV Upload":
-        uploaded_file = st.sidebar.file_uploader("Upload CSV File", type=['csv'])
-        if uploaded_file:
-            st.session_state.state.uploaded_file = uploaded_file
-            st.session_state.state.data_source = "csv"
-    
-    elif data_source == "Database":
-        db_type = st.sidebar.selectbox("Database Type", ["SQLite", "PostgreSQL", "MySQL"])
-        connection_string = st.sidebar.text_input("Connection String", 
-                                                "sqlite:///demand_data.sqlite")
-        query = st.sidebar.text_area("SQL Query (optional)", 
-                                   "SELECT * FROM demand_data")
-        
-        if st.sidebar.button("Connect to Database"):
-            st.session_state.state.connection_string = connection_string
-            st.session_state.state.data_source = "database"
-            st.session_state.state.query = query
-    
-    elif data_source == "API":
-        api_endpoint = st.sidebar.text_input("API Endpoint")
-        api_key = st.sidebar.text_input("API Key (if required)", type="password")
-        
-        if st.sidebar.button("Connect to API"):
-            st.session_state.state.api_config = {
-                "endpoint": api_endpoint,
-                "key": api_key
-            }
-            st.session_state.state.data_source = "api"
+    with st.sidebar:
+        st.markdown("### Configure Data Source")
+
+        data_source = st.radio("Choose how to load data:", 
+                               ["📁 CSV Upload", "🗄️ Database", "🌐 API"],
+                               index=0)
+
+        st.markdown("---")
+
+        if data_source == "CSV Upload":
+            st.markdown("#### Upload a CSV File")
+            uploaded_file = st.file_uploader("Select a CSV file", type=["csv"])
+            if uploaded_file:
+                st.session_state.state.uploaded_file = uploaded_file
+                st.session_state.state.data_source = "csv"
+                st.toast("CSV file uploaded successfully!")
+
+        elif data_source == "🗄️ Database":
+            st.markdown("#### Connect to a Database")
+            db_type = st.selectbox("Database Type", ["SQLite", "PostgreSQL", "MySQL"])
+            connection_string = st.text_input(
+                "Connection String",
+                placeholder="e.g., sqlite:///demand_data.sqlite"
+            )
+            query = st.text_area(
+                "SQL Query (Optional)",
+                placeholder="SELECT * FROM demand_data"
+            )
+
+            if st.button("🔌 Connect to Database"):
+                st.session_state.state.connection_string = connection_string
+                st.session_state.state.data_source = "database"
+                st.session_state.state.query = query
+                st.toast(f"Connected to {db_type} database!")
+
+        elif data_source == "🌐 API":
+            st.markdown("#### Connect to an API")
+            api_endpoint = st.text_input("API Endpoint", placeholder="https://api.example.com/data")
+            api_key = st.text_input("API Key (if needed)", type="password")
+
+            if st.button("🔌 Connect to API"):
+                st.session_state.state.api_config = {
+                    "endpoint": api_endpoint,
+                    "key": api_key
+                }
+                st.session_state.state.data_source = "api"
+                st.toast("API connection configured!")
