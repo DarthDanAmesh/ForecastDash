@@ -5,7 +5,7 @@ import plotly.express as px
 from cls_data_preprocessor import DataProcessor
 from cls_forecast_engine import ForecastEngine
 
-from funct_kpi_forecast_metrics import calculate_forecast_accuracy, plot_forecast_accuracy
+from funct_kpi_forecast_metrics import calculate_forecast_accuracy 
 from funct_prep_order_based_deliv_forecast import prepare_order_time_series
 
 
@@ -30,7 +30,7 @@ def show_extended_forecasting():
     show_confidence = st.checkbox("Show Confidence Intervals", value=True)
     confidence_level = st.slider("Confidence Level (%)", 50, 95, 80) if show_confidence else 80
     
-    if st.button("Generate Extended Forecast"):
+    if st.button("Generate Delivery Forecast"):
         with st.spinner("Generating extended forecast..."):
             df = st.session_state.state.data
             
@@ -38,6 +38,7 @@ def show_extended_forecasting():
             ts = prepare_order_time_series(df)
             if ts is None:
                 ts = DataProcessor.prepare_time_series(df)  # Fallback to delivery-based
+                st.info("Using delivery based time series (Act. Gds Issue Date)")
             
             if model_type == "XGBoost":
                 last_date = DataProcessor.prepare_time_series(df).index[-1]
@@ -76,12 +77,16 @@ def show_extended_forecasting():
             fig.add_scatter(x=forecast.index, y=forecast.values, name='Forecast')
             
             if show_confidence:
-                fig.add_scatter(x=forecast.index, y=upper_bound, 
+                fig.add_scatter(x=forecast.index, 
+                                y=upper_bound, 
                                name=f'Upper Bound ({confidence_level}%)',
-                               line=dict(dash='dash'))
+                               line=dict(dash='dash', color='lightgreen'))
                 fig.add_scatter(x=forecast.index, y=lower_bound, 
                                name=f'Lower Bound ({confidence_level}%)',
-                               line=dict(dash='dash'))
+                               line=dict(dash='dash', color='lightcoral'),
+                               fill='tonexty',
+                               fillcolor='rgba(255, 204, 204, 0.2)'
+                               )
             
             st.plotly_chart(fig)
             
@@ -99,25 +104,3 @@ def show_extended_forecasting():
             
             st.write("Extended Forecast Values:")
             st.dataframe(forecast_df)
-            
-            # Calculate and show accuracy metrics if we have historical data
-            if len(ts) > 12:  # At least 1 year of historical data
-                historical_accuracy = calculate_forecast_accuracy(
-                    ts[-12:],  # Last 12 months of actual data
-                    ts[-12:].shift(1),  # Simple 1-month lag forecast as baseline
-                    level='monthly'
-                )
-                
-                st.subheader("Historical Forecast Accuracy")
-                st.plotly_chart(plot_forecast_accuracy(historical_accuracy))
-                
-                # Overall accuracy metrics
-                overall_accuracy = calculate_forecast_accuracy(
-                    ts[-12:],  # Last 12 months of actual data
-                    ts[-12:].shift(1),  # Simple 1-month lag forecast
-                    level='overall'
-                )
-                
-                st.metric("Overall Forecast Accuracy", 
-                          f"{overall_accuracy['Accuracy_Pct'].iloc[0]:.2f}%",
-                          delta=f"{overall_accuracy['Accuracy_Pct'].iloc[0] - 50:.2f}%")
