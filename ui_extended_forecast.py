@@ -5,12 +5,12 @@ import plotly.express as px
 from cls_data_preprocessor import DataProcessor
 from cls_forecast_engine import ForecastEngine
 
-from funct_kpi_forecast_accuracy import calculate_forecast_accuracy, plot_forecast_accuracy
+from funct_kpi_forecast_metrics import calculate_forecast_accuracy, plot_forecast_accuracy
 from funct_prep_order_based_deliv_forecast import prepare_order_time_series
 
 
 def show_extended_forecasting():
-    st.header("Extended Demand Forecasting (18 Months)")
+    st.header("Extended Demand Forecasting (12 Months)")
     
     if not st.session_state.state.models:
         st.warning("No trained models available. Please train a model first.")
@@ -22,8 +22,8 @@ def show_extended_forecasting():
     
     model_info = st.session_state.state.models[model_type]
     
-    # Fixed 18-month forecast period as per business requirement
-    forecast_period = 18
+    # Fixed 12-month forecast period as per business requirement
+    forecast_period = 12
     st.info(f"Forecasting for the next {forecast_period} months as per business requirement.")
     
     # Add confidence interval option
@@ -48,28 +48,31 @@ def show_extended_forecasting():
                     last_date
                 )
                 
-                # Generate confidence intervals using bootstrapping (simplified)
-                if show_confidence:
-                    lower_bound = forecast * (1 - (1 - confidence_level/100)/2)
-                    upper_bound = forecast * (1 + (1 - confidence_level/100)/2)
+                # Generate simple confidence intervals
+                forecast_series = pd.Series(forecast) if not isinstance(forecast, pd.Series) else forecast
+                
+                error_margin = (1 - confidence_level/100) * 0.5
+
+                # Calculate bounds with minimum 10% spread even for high confidence
+                lower_bound = forecast_series * (1 - max(error_margin, 0.1))
+                upper_bound = forecast_series * (1 + max(error_margin, 0.1))
                 
             elif model_type == "ARIMA":
                 forecast_result = model_info['model'].get_forecast(steps=forecast_period)
                 forecast = forecast_result.predicted_mean
                 
-                # Get confidence intervals from ARIMA
-                if show_confidence:
-                    conf_int = forecast_result.conf_int(alpha=(1 - confidence_level/100))
-                    lower_bound = conf_int.iloc[:, 0]
-                    upper_bound = conf_int.iloc[:, 1]
+                # Manual confidence intervals if not available from model
+                error_margin = (1 - confidence_level/100) * 0.5
+                lower_bound = forecast * (1 - max(error_margin, 0.1))
+                upper_bound = forecast * (1 + max(error_margin, 0.1))
             
             st.session_state.state.forecasts[model_type] = forecast
             
             # Show forecast
-            st.subheader("18-Month Demand Forecast")
+            st.subheader("12-Month Demand Forecast")
             
             # Create forecast plot with confidence intervals
-            fig = px.line(ts, title="Extended Demand Forecast (18 Months)")
+            fig = px.line(ts, title="Extended Demand Forecast (12 Months)")
             fig.add_scatter(x=forecast.index, y=forecast.values, name='Forecast')
             
             if show_confidence:
@@ -89,8 +92,10 @@ def show_extended_forecasting():
             })
             
             if show_confidence:
-                forecast_df['Lower_Bound'] = lower_bound
-                forecast_df['Upper_Bound'] = upper_bound
+                # Ensure these have the same length as forecast
+                forecast_df['Lower_Bound'] = lower_bound.values if hasattr(lower_bound, 'values') else lower_bound
+                forecast_df['Upper_Bound'] = upper_bound.values if hasattr(upper_bound, 'values') else upper_bound
+
             
             st.write("Extended Forecast Values:")
             st.dataframe(forecast_df)

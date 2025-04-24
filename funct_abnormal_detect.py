@@ -1,6 +1,26 @@
 import plotly.express as px
 import pandas as pd
-def detect_sales_anomalies(ts, window=12, sigma=3):
+
+
+def detect_sales_anomalies(ts, window=3, sigma=2):
+    """Detect anomalies in sales time series"""
+    # Use smaller window for limited data
+    rolling_mean = ts.rolling(window=window, min_periods=1).mean()
+    rolling_std = ts.rolling(window=window, min_periods=1).std().fillna(ts.std())
+    
+    upper_bound = rolling_mean + (rolling_std * sigma)
+    lower_bound = rolling_mean - (rolling_std * sigma)
+    
+    anomalies = pd.DataFrame(index=ts.index)
+    anomalies['original'] = ts
+    anomalies['rolling_mean'] = rolling_mean
+    anomalies['upper_bound'] = upper_bound
+    anomalies['lower_bound'] = lower_bound
+    anomalies['is_anomaly'] = (ts > upper_bound) | (ts < lower_bound)
+    
+    return anomalies
+
+def detect_sales_anomalies_depr(ts, window=12, sigma=3):
     """
     Detect anomalies in sales time series using rolling statistics
     

@@ -34,7 +34,7 @@ class ForecastEngine:
         current_features = last_known_values.copy()
 
         for _ in range(periods):
-            next_pred = model.predict(current_features.reshape(1, -1))[0]
+            next_pred = model.predict(np.array(current_features).reshape(1, -1))[0]
             forecast.append(next_pred)
 
             current_features = np.roll(current_features, -1)

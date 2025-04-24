@@ -27,8 +27,6 @@ if 'state' not in st.session_state:
     st.session_state.state = SessionState()
 
 
-
-# Main App
 # Main App
 def main():
     st.title("Product Demand Analysis and Prediction Toolkit")
@@ -86,6 +84,7 @@ def main():
             st.header("Sales Anomaly Detection")
             ts = DataProcessor.prepare_time_series(st.session_state.state.data)
             anomalies = detect_sales_anomalies(ts)
+            print("anoms",anomalies)
             st.plotly_chart(plot_anomalies(anomalies))
             
             # Show anomalies table
