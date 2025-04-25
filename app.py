@@ -4,7 +4,9 @@ import plotly.express as px
 from cls_session_management import SessionState
 from cls_data_preprocessor import DataProcessor
 
-
+from typing import List
+import pandas as pd
+from pygwalker.api.streamlit import init_streamlit_comm, StreamlitRenderer, PreFilter
 from ui_data_source import show_data_source_selection
 from ui_model_management import show_model_management
 from ui_extended_forecast import show_extended_forecasting
@@ -54,7 +56,8 @@ def main():
         "Regional Analysis",
         "Anomaly Detection",
         "Discontinued Products",
-        "Model Management"
+        "Model Management",
+        "Test"
     ])
     
     with tabs[0]:
@@ -114,6 +117,72 @@ def main():
     
     with tabs[7]:
         show_model_management()
+
+    with tabs[8]:
+        
+        # Initialize pygwalker communication
+        init_streamlit_comm()
+
+
+        @st.cache_data
+        def get_data() -> pd.DataFrame:
+            return pd.read_csv(r"C:\Users\danie\Downloads\Billionaires Statistics Dataset.csv")
+
+
+        @st.cache_data
+        def get_all_country() -> List[str]:
+            return get_data()["country"].unique().tolist()
+
+
+        # You should cache your pygwalker renderer, if you don't want your memory to explode
+        @st.cache_resource
+        def get_pyg_renderer() -> "StreamlitRenderer":
+            df = get_data()
+            # When you need to publish your application, you need set `debug=False`,prevent other users to write your config file.
+            return StreamlitRenderer(df, spec=r"C:\Users\danie\Downloads\billion_config.json", debug=False)
+
+
+        renderer = get_pyg_renderer()
+
+        # display explore ui, Developers can use this to prepare the charts you need to display.
+        # renderer.render_explore()
+
+        pre_filters = []
+
+        selected_country = st.multiselect(
+            'please select country',
+            get_all_country(),
+            []
+        )
+
+        if selected_country:
+            pre_filters.append(PreFilter(
+                field="country",
+                op="one of",
+                value=selected_country
+            ))
+
+        renderer.set_global_pre_filters(pre_filters)
+
+        tab1, tab2 = st.tabs(
+            ["Area Distribution", "Gender Distribution"]
+        )
+
+        # display chart ui
+        with tab1:
+            st.subheader("Country Distribution")
+            renderer.chart(0)
+            st.subheader("Area Distribution")
+            renderer.chart(2)
+
+        with tab2:
+            st.subheader("Gender Distribution")
+            renderer.chart(1)
+            st.subheader("Gender Distribution By Rank")
+            renderer.chart(3)
+            st.subheader("Gender Distribution By Age")
+            renderer.chart(4)
+
 
 if __name__ == "__main__":
     main()
