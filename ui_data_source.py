@@ -1,50 +1,168 @@
 import streamlit as st
+from typing import Optional
+from urllib.parse import urlparse
 
-def show_data_source_selection():
+def validate_connection_string(db_type: str, connection_string: str) -> tuple[bool, str]:
+    """
+    Validate the database connection string format.
+
+    Args:
+        db_type (str): Database type (e.g., SQLite, PostgreSQL).
+        connection_string (str): Connection string to validate.
+
+    Returns:
+        tuple[bool, str]: (is_valid, message) indicating if the connection string is valid and any error message.
+    """
+    if not connection_string:
+        return False, "Connection string cannot be empty."
+    if db_type == "SQLite" and not connection_string.startswith("sqlite:///"):
+        return False, "SQLite connection string must start with 'sqlite:///'."
+    if db_type in ["PostgreSQL", "MySQL"] and "://" not in connection_string:
+        return False, f"{db_type} connection string must include a scheme (e.g., 'postgresql://')."
+    return True, ""
+
+def validate_api_config(endpoint: str, key: Optional[str] = None) -> tuple[bool, str]:
+    """
+    Validate the API configuration.
+
+    Args:
+        endpoint (str): API endpoint URL.
+        key (Optional[str]): API key, if provided.
+
+    Returns:
+        tuple[bool, str]: (is_valid, message) indicating if the API config is valid and any error message.
+    """
+    if not endpoint:
+        return False, "API endpoint cannot be empty."
+    try:
+        result = urlparse(endpoint)
+        if not all([result.scheme, result.netloc]):
+            return False, "Invalid API endpoint. Must be a valid URL (e.g., 'https://api.example.com/data')."
+    except ValueError:
+        return False, "Invalid API endpoint format."
+    return True, ""
+
+def render_csv_ui() -> None:
+    """Render the UI for CSV file upload."""
+    st.markdown("#### 📁 Upload a CSV File", help="Upload a CSV or Excel file containing demand data (e.g., columns: date, demand).")
+    uploaded_file = st.file_uploader(
+        "Select a CSV or Excel file",
+        type=["csv", "xlsx"],
+        help="Supported formats: CSV, Excel (.xlsx). Ensure the file includes required columns (e.g., date, demand)."
+    )
+    if uploaded_file:
+        try:
+            st.session_state.state.uploaded_file = uploaded_file
+            st.session_state.state.data_source = "csv"
+            st.success("CSV/Excel file uploaded successfully! Click 'Load Data' to process.")
+            st.toast("✅ CSV/Excel file ready for loading!")
+        except AttributeError:
+            st.error("Session state not initialized. Please restart the app.")
+            st.session_state.state.uploaded_file = None
+
+def render_database_ui() -> None:
+    """Render the UI for database connection."""
+    st.markdown("#### 🗄️ Connect to a Database", help="Enter details to connect to a database containing demand data.")
+    db_type = st.selectbox(
+        "Database Type",
+        ["SQLite", "PostgreSQL", "MySQL"],
+        help="Select the database type you are connecting to."
+    )
+    connection_string = st.text_input(
+        "Connection String",
+        placeholder="e.g., sqlite:///demand_data.sqlite or postgresql://user:password@host:port/db",
+        help="Enter the connection string for your database. Example formats:\n- SQLite: sqlite:///path/to/db.sqlite\n- PostgreSQL: postgresql://user:password@host:port/db"
+    )
+    query = st.text_area(
+        "SQL Query (Optional)",
+        placeholder="SELECT * FROM demand_data",
+        help="Enter a SQL query to fetch data. Leave blank to use the default query: 'SELECT * FROM demand_data'."
+    )
+
+    if st.button("🔌 Connect to Database", help="Validate and save database connection details."):
+        is_valid, message = validate_connection_string(db_type, connection_string)
+        if not is_valid:
+            st.error(message)
+            st.toast(f"❌ {message}")
+            return
+        try:
+            st.session_state.state.connection_string = connection_string
+            st.session_state.state.data_source = "database"
+            st.session_state.state.query = query if query.strip() else "SELECT * FROM demand_data"
+            st.success(f"Connected to {db_type} database! Click 'Load Data' to fetch data.")
+            st.toast(f"✅ {db_type} database connection configured!")
+        except AttributeError:
+            st.error("Session state not initialized. Please restart the app.")
+            st.session_state.state.connection_string = None
+
+def render_api_ui() -> None:
+    """Render the UI for API connection."""
+    st.markdown("#### 🌐 Connect to an API", help="Enter details to fetch demand data from an API.")
+    api_endpoint = st.text_input(
+        "API Endpoint",
+        placeholder="https://api.example.com/data",
+        help="Enter the API endpoint URL (e.g., 'https://api.example.com/data')."
+    )
+    api_key = st.text_input(
+        "API Key (Optional)",
+        type="password",
+        help="Enter the API key if required by the endpoint."
+    )
+
+    if st.button("🔌 Connect to API", help="Validate and save API connection details."):
+        is_valid, message = validate_api_config(api_endpoint, api_key)
+        if not is_valid:
+            st.error(message)
+            st.toast(f"❌ {message}")
+            return
+        try:
+            st.session_state.state.api_config = {
+                "url": api_endpoint,  # Align with source_loading_util_funct.py
+                "headers": {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            }
+            st.session_state.state.data_source = "api"
+            st.success("API connection configured! Click 'Load Data' to fetch data.")
+            st.toast("✅ API connection ready!")
+        except AttributeError:
+            st.error("Session state not initialized. Please restart the app.")
+            st.session_state.state.api_config = None
+
+def show_data_source_selection() -> None:
+    """
+    Render the sidebar UI for selecting and configuring a data source.
+
+    Supports CSV upload, database connection, and API configuration, with validation and feedback.
+    """
     with st.sidebar:
-        st.markdown("### Configure Data Source")
+        st.markdown("### Configure Data Source", help="Select a method to load your demand data.")
+        
+        # Check session state
+        if 'state' not in st.session_state or not isinstance(st.session_state.state, SessionState):
+            st.error("Session state not initialized. Please restart the app.")
+            return
 
-        data_source = st.radio("Choose how to load data:", 
-                               ["📁 CSV Upload", "🗄️ Database", "🌐 API"],
-                               index=0)
+        # Mode-based UI (Simple Mode: CSV only; Technical Mode: All options)
+        mode = st.session_state.get('mode', 'Simple')
+        if mode == "Simple":
+            data_source = "📁 CSV Upload"
+            st.markdown("**Simple Mode: CSV Upload**", help="Upload a CSV or Excel file for quick analysis.")
+        else:
+            data_source = st.radio(
+                "Choose how to load data:",
+                ["📁 CSV Upload", "🗄️ Database", "🌐 API"],
+                index=0,
+                help="Select a data source: CSV/Excel file, database, or API endpoint."
+            )
 
         st.markdown("---")
 
+        # Render UI based on data source
         if data_source == "📁 CSV Upload":
-            st.markdown("#### Upload a CSV File")
-            uploaded_file = st.file_uploader("Select a CSV file", type=["csv"])
-            if uploaded_file:
-                st.session_state.state.uploaded_file = uploaded_file
-                st.session_state.state.data_source = "csv"
-                st.toast("CSV file uploaded successfully!")
-
+            render_csv_ui()
         elif data_source == "🗄️ Database":
-            st.markdown("#### Connect to a Database")
-            db_type = st.selectbox("Database Type", ["SQLite", "PostgreSQL", "MySQL"])
-            connection_string = st.text_input(
-                "Connection String",
-                placeholder="e.g., sqlite:///demand_data.sqlite"
-            )
-            query = st.text_area(
-                "SQL Query (Optional)",
-                placeholder="SELECT * FROM demand_data"
-            )
-
-            if st.button("🔌 Connect to Database"):
-                st.session_state.state.connection_string = connection_string
-                st.session_state.state.data_source = "database"
-                st.session_state.state.query = query
-                st.toast(f"Connected to {db_type} database!")
-
+            render_database_ui()
         elif data_source == "🌐 API":
-            st.markdown("#### Connect to an API")
-            api_endpoint = st.text_input("API Endpoint", placeholder="https://api.example.com/data")
-            api_key = st.text_input("API Key (if needed)", type="password")
+            render_api_ui()
 
-            if st.button("🔌 Connect to API"):
-                st.session_state.state.api_config = {
-                    "endpoint": api_endpoint,
-                    "key": api_key
-                }
-                st.session_state.state.data_source = "api"
-                st.toast("API connection configured!")
+# Import SessionState to avoid circular imports
+from cls_session_management import SessionState
