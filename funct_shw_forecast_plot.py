@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from cls_data_preprocessor import DataProcessor
+from cls_session_management import SessionState
 from cls_forecast_engine import ForecastEngine
 from cls_plots_visuals import Visualizer
 from consts_model import DEFAULT_FORECAST_PERIOD
@@ -48,16 +49,27 @@ def cached_generate_forecast(_ts: pd.Series, model_type: str, forecast_period: i
         return None
 
 def show_forecasting():
-    """Display forecasting interface for Simple and Technical modes."""
+    # Validate session state
+    if not isinstance(st.session_state.state, SessionState):
+        st.error("Session state is not properly initialized. Reinitializing...", icon="🚨")
+        st.session_state.state = SessionState.get_or_create()
+        st.rerun()
+
     if st.session_state.state.data is None:
-        st.error("No data loaded. Please upload a CSV/Excel file with date and demand columns.")
+        st.error(
+            "No data loaded. Please upload a CSV/Excel file with date and demand columns.", 
+            icon="🚨"
+        )
         return
 
     if len(st.session_state.state.data) < MIN_DATA_POINTS:
-        st.error(f"At least {MIN_DATA_POINTS} data points are required for forecasting.")
+        st.error(
+            f"At least {MIN_DATA_POINTS} data points are required for forecasting.", 
+            icon="🚨"
+        )
         return
 
-    # Initialize session state
+    # Initialize session state variables
     if 'current_forecast' not in st.session_state:
         st.session_state.current_forecast = None
     if 'current_ts' not in st.session_state:
@@ -66,58 +78,70 @@ def show_forecasting():
         st.session_state.forecast_generated = False
     if 'forecast_params' not in st.session_state:
         st.session_state.forecast_params = {'model_type': None, 'forecast_period': None}
+    
+    # Initialize forecasts dictionary
+    if not hasattr(st.session_state.state, 'forecasts'):
+        st.session_state.state.forecasts = {}
 
     # Prepare time series
     ts = DataProcessor.prepare_time_series(st.session_state.state.data)
     if ts is None or ts.empty:
-        st.error("Failed to prepare time series. Ensure the data has valid date and demand columns.")
+        st.error(
+            "Failed to prepare time series. Ensure the data has valid date and demand columns.", 
+            icon="🚨"
+        )
         return
     st.session_state.current_ts = ts
 
-    # Default model for Simple mode
-    default_model = "ARIMA" if "ARIMA" in st.session_state.state.models else None
-    if not st.session_state.state.models:
-        if st.session_state.mode == "Simple":
-            st.warning("No trained models available. Using default ARIMA model.")
-            # Initialize default ARIMA model
-            try:
-                model_info = ForecastEngine.train_arima(ts)
-                st.session_state.state.models["ARIMA"] = model_info
-            except Exception as e:
-                st.error(f"Failed to initialize default model: {str(e)}")
-                return
-        else:
-            st.warning("No trained models available. Please train a model in Model Training.")
-            return
-
     # UI based on mode
     if st.session_state.mode == "Simple":
-        show_simple_forecast(ts, default_model)
+        show_simple_forecast(ts)
     else:
         show_technical_forecast(ts)
 
-def show_simple_forecast(ts: pd.Series, default_model: str):
+def show_simple_forecast(ts: pd.Series):
     """Simplified forecasting UI for non-technical users."""
     st.header("Demand Forecast")
     st.markdown("View predicted demand and inventory recommendations.")
 
+    # Check if a model is available
+    default_model = "ARIMA" if "ARIMA" in st.session_state.state.models else None
+    if not st.session_state.state.models or default_model is None:
+        st.info(
+            "No trained models available. Click 'Generate Default Forecast' in the Demand Forecast section above to proceed.",
+            icon="ℹ️"
+        )
+        return
+
     model_type = default_model
-    model_info = st.session_state.state.models[model_type]
+    try:
+        model_info = st.session_state.state.models[model_type]
+    except KeyError:
+        st.error(
+            f"Model '{model_type}' not found in session state. Please train a model first.", 
+            icon="🚨"
+        )
+        return
+
     forecast_period = DEFAULT_FORECAST_PERIOD
 
     if st.session_state.forecast_generated and st.session_state.current_forecast is not None:
         display_forecast(ts, st.session_state.current_forecast)
         return
 
+    """# Button moved to app.py, but keep for compatibility
     if st.button("Generate Forecast", type="primary", help="Generate a demand forecast"):
         with st.spinner("Generating forecast..."):
             forecast = cached_generate_forecast(ts, model_type, forecast_period, model_info)
             if forecast is not None:
                 update_forecast_state(model_type, forecast_period, forecast)
                 display_forecast(ts, forecast)
-                st.success("Forecast generated successfully!")
+                st.success("Forecast generated successfully!", icon="✅")
             else:
-                st.error("Failed to generate forecast. Check data or model settings.")
+                st.error(
+                    "Failed to generate forecast. Check data or model settings.", 
+                    icon="🚨"
+                )"""
 
 def show_technical_forecast(ts: pd.Series):
     """Detailed forecasting UI for technical users."""
@@ -127,20 +151,42 @@ def show_technical_forecast(ts: pd.Series):
     tab1, tab2 = st.tabs(["Generate Forecast", "Analyze Accuracy"])
 
     with tab1:
-        model_type = st.selectbox("Select Model", list(st.session_state.state.models.keys()), 
-                                 key="forecast_model_select")
+        if not st.session_state.state.models:
+            st.warning(
+                "No trained models available. Please train a model in the Model Tuning tab.", 
+                icon="⚠️"
+            )
+            return
+        model_type = st.selectbox(
+            "Select Model", 
+            list(st.session_state.state.models.keys()), 
+            key="forecast_model_select"
+        )
         model_info = st.session_state.state.models[model_type]
-        forecast_period = st.number_input("Forecast Period (months)", min_value=1, max_value=24, 
-                                        value=DEFAULT_FORECAST_PERIOD, key="forecast_period_input")
+        forecast_period = st.number_input(
+            "Forecast Period (months)", 
+            min_value=1, 
+            max_value=24, 
+            value=DEFAULT_FORECAST_PERIOD, 
+            key="forecast_period_input"
+        )
 
-        params_changed = (model_type != st.session_state.forecast_params['model_type'] or 
-                         forecast_period != st.session_state.forecast_params['forecast_period'])
+        params_changed = (
+            model_type != st.session_state.forecast_params['model_type'] or 
+            forecast_period != st.session_state.forecast_params['forecast_period']
+        )
         if params_changed and st.session_state.forecast_generated:
-            st.warning("Parameters changed. Click 'Generate Forecast' to update.")
+            st.warning(
+                "Parameters changed. Click 'Generate Forecast' to update.", 
+                icon="⚠️"
+            )
             st.session_state.forecast_generated = False
 
         if forecast_period > 12:
-            st.warning("Long forecast periods may reduce accuracy. Consider shorter horizons.")
+            st.warning(
+                "Long forecast periods may reduce accuracy. Consider shorter horizons.", 
+                icon="⚠️"
+            )
             proceed = st.checkbox("Proceed anyway", key="proceed_checkbox")
             if not proceed:
                 return
@@ -153,16 +199,25 @@ def show_technical_forecast(ts: pd.Series):
                 if forecast is not None:
                     update_forecast_state(model_type, forecast_period, forecast)
                     display_forecast(ts, forecast)
-                    st.success("Forecast generated successfully!")
+                    st.success("Forecast generated successfully!", icon="✅")
                 else:
-                    st.error("Failed to generate forecast. Check model or data settings.")
+                    st.error(
+                        "Failed to generate forecast. Check model or data settings.", 
+                        icon="🚨"
+                    )
 
     with tab2:
         if not st.session_state.forecast_generated or st.session_state.current_forecast is None:
-            st.warning("No forecast available. Generate a forecast in the 'Generate Forecast' tab.")
+            st.warning(
+                "No forecast available. Generate a forecast in the 'Generate Forecast' tab.", 
+                icon="⚠️"
+            )
             return
-        analyze_forecast_accuracy(ts, st.session_state.forecast_params['model_type'], 
-                                st.session_state.forecast_params['forecast_period'])
+        analyze_forecast_accuracy(
+            ts, 
+            st.session_state.forecast_params['model_type'], 
+            st.session_state.forecast_params['forecast_period']
+        )
 
 def display_forecast(ts: pd.Series, forecast: pd.Series):
     """Display forecast plot and data."""
@@ -255,7 +310,7 @@ def analyze_forecast_accuracy(ts: pd.Series, model_type: str, forecast_period: i
         with st.spinner("Analyzing accuracy..."):
             accuracy_metrics = cached_analyze_accuracy(ts, model_type, forecast_period, months, model_info)
             if accuracy_metrics is None or accuracy_metrics.empty:
-                st.warning("Insufficient data for accuracy analysis.")
+                st.warning("Insufficient data for accuracy analysis.", icon="⚠️")
                 return
 
             accuracy_numeric = accuracy_metrics['Accuracy_Pct'].copy()
@@ -285,8 +340,10 @@ def analyze_forecast_accuracy(ts: pd.Series, model_type: str, forecast_period: i
                 pd.Series(accuracy_metrics['Forecast'].values, index=accuracy_metrics['Month'])
             )
             st.subheader("Overall Performance")
-            st.info(f"Overall MAPE: {overall_accuracy['MAPE'].iloc[0]:.2f}%, "
-                    f"Accuracy: {overall_accuracy['Accuracy_Pct'].iloc[0]:.2f}%")
+            st.info(
+                f"Overall MAPE: {overall_accuracy['MAPE'].iloc[0]:.2f}%, "
+                f"Accuracy: {overall_accuracy['Accuracy_Pct'].iloc[0]:.2f}%"
+            )
 
             if len(accuracy_metrics) >= 3:
                 st.subheader("Error Pattern Analysis")
@@ -294,7 +351,10 @@ def analyze_forecast_accuracy(ts: pd.Series, model_type: str, forecast_period: i
                 if trend > WARNING_THRESHOLD:
                     st.success("✓ Forecast accuracy improving.")
                 elif trend < -WARNING_THRESHOLD:
-                    st.error("⚠ Forecast accuracy declining. Consider retraining.")
+                    st.error(
+                        "⚠ Forecast accuracy declining. Consider retraining.", 
+                        icon="⚠️"
+                    )
                 else:
                     st.info("ℹ Forecast accuracy stable.")
 
@@ -307,7 +367,10 @@ def analyze_forecast_accuracy(ts: pd.Series, model_type: str, forecast_period: i
                 problem_months = monthly_avgs[monthly_avgs < monthly_avgs.mean() - WARNING_THRESHOLD].index
                 if problem_months.any():
                     month_names = [calendar.month_name[m] for m in problem_months]
-                    st.warning(f"⚠ Lower accuracy in: {', '.join(month_names)}. Consider seasonal adjustments.")
+                    st.warning(
+                        f"⚠ Lower accuracy in: {', '.join(month_names)}. Consider seasonal adjustments.", 
+                        icon="⚠️"
+                    )
 
             st.subheader(f"Forecast Confidence ({forecast_period}-month)")
             confidence = min(95, max(50, accuracy_numeric.mean()))

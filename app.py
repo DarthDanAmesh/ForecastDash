@@ -14,9 +14,11 @@ from funct_feature_eng import enhance_feature_engineering
 from funct_load_data import load_data
 from funct_eda import show_data_exploration
 from funct_model_training import show_model_training
-from funct_shw_forecast_plot import show_forecasting
+from funct_shw_forecast_plot import display_forecast, show_forecasting, update_forecast_state, cached_generate_forecast
 from funct_detect_prod_discontinued import detect_discontinued_products
 from column_config import STANDARD_COLUMNS
+from cls_forecast_engine import ForecastEngine
+from consts_model import DEFAULT_FORECAST_PERIOD
 
 # Configuration
 st.set_page_config(page_title="Product Demand Toolkit", layout="wide", initial_sidebar_state="expanded")
@@ -74,23 +76,28 @@ logger = logging.getLogger(__name__)
 
 # Initialize session state with defaults
 def initialize_session_state():
-    if 'state' not in st.session_state:
-        logger.info("Initializing SessionState")
-        st.session_state.state = SessionState()
+    if 'state' not in st.session_state or not isinstance(st.session_state.state, SessionState):
+        logger.info("Initializing or reinitializing SessionState")
+        st.session_state.state = SessionState.get_or_create()
+    
+    # Set default values if not already set
+    if not hasattr(st.session_state.state, 'data_source'):
         st.session_state.state.data_source = "csv"
+    if not hasattr(st.session_state.state, 'data'):
         st.session_state.state.data = None
+    if not hasattr(st.session_state.state, 'processed_data'):
         st.session_state.state.processed_data = None
+    if not hasattr(st.session_state.state, 'models'):
         st.session_state.state.models = {}
+    if not hasattr(st.session_state.state, 'forecasts'):
+        st.session_state.state.forecasts = {}
 
     if 'mode' not in st.session_state:
         st.session_state.mode = "Simple"
-
     if 'model_params' not in st.session_state:
         st.session_state.model_params = {"forecast_horizon": 12}
-
     if 'forecast_generated' not in st.session_state:
         st.session_state.forecast_generated = False
-
     if 'current_forecast' not in st.session_state:
         st.session_state.current_forecast = None
 
@@ -220,10 +227,49 @@ def show_simple_mode():
     st.header("Demand Planning Dashboard")
     st.markdown("Explore key insights and forecasts to optimize inventory.")
 
+    # Validate session state
+    if not isinstance(st.session_state.state, SessionState):
+        st.error("Session state is not properly initialized. Reinitializing...", icon="🚨")
+        st.session_state.state = SessionState.get_or_create()
+        st.rerun()  # Force rerun to apply reinitialization
+
     col1, col2 = st.columns([3, 1])
     with col1:
         with st.expander("Demand Forecast", expanded=True):
-            show_forecasting()
+            if st.session_state.forecast_generated and st.session_state.current_forecast is not None:
+                show_forecasting()
+            else:
+                st.info(
+                    "No forecast available. Click below to generate a demand forecast using the default ARIMA model.",
+                    icon="ℹ️"
+                )
+                if st.button("Generate Default Forecast", type="primary", help="Generate a demand forecast"):
+                    with st.spinner("Generating default forecast..."):
+                        logger.info(f"Session state type: {type(st.session_state.state)}")
+                        logger.info(f"Models before assignment: {st.session_state.state.models}")
+                        ts = DataProcessor.prepare_time_series(st.session_state.state.data)
+                        if validate_time_series(ts):
+                            try:
+                                logger.info("Training ARIMA model")
+                                model_info = ForecastEngine.train_arima(ts)
+                                st.session_state.state.models["ARIMA"] = model_info
+                                st.session_state.forecast_generated = False
+                                logger.info("Calling show_forecasting")
+                                model_type = "ARIMA"
+                                forecast = cached_generate_forecast(ts, model_type, DEFAULT_FORECAST_PERIOD, model_info)
+                                if forecast is not None:
+                                    update_forecast_state(model_type, DEFAULT_FORECAST_PERIOD, forecast)
+                                    display_forecast(ts, forecast)
+                                st.toast("Default forecast generated successfully!", icon="✅")
+                            except Exception as e:
+                                logger.error(f"Forecast error: {str(e)}")
+                                st.error(
+                                    f"Failed to generate default forecast: {str(e)}. Please check data.", 
+                                    icon="🚨"
+                                )
+                        else:
+                            logger.error("Invalid time series")
+                            st.error("Invalid time series data. Please check your input.", icon="🚨")
             st.markdown(
                 '<div class="tooltip">ℹ️<span class="tooltiptext">Use these forecasts to adjust inventory levels in high-demand periods.</span></div>',
                 unsafe_allow_html=True
@@ -233,18 +279,21 @@ def show_simple_mode():
     with col2:
         with st.expander("Key Metrics", expanded=True):
             data = st.session_state.state.data
-            st.metric(
-                "Average Demand",
-                f"{data[STANDARD_COLUMNS['demand']].mean():.2f}",
-                help="Average demand across all periods."
-            )
-            ts = DataProcessor.prepare_time_series(data)
-            anomalies_count = len(detect_sales_anomalies(ts)) if validate_time_series(ts) else 0
-            st.metric(
-                "Recent Anomalies",
-                anomalies_count,
-                help="Number of unusual demand spikes or drops."
-            )
+            if data is not None and STANDARD_COLUMNS['demand'] in data.columns:
+                st.metric(
+                    "Average Demand",
+                    f"{data[STANDARD_COLUMNS['demand']].mean():.2f}",
+                    help="Average demand across all periods."
+                )
+                ts = DataProcessor.prepare_time_series(data)
+                anomalies_count = len(detect_sales_anomalies(ts)) if validate_time_series(ts) else 0
+                st.metric(
+                    "Recent Anomalies",
+                    anomalies_count,
+                    help="Number of unusual demand spikes or drops."
+                )
+            else:
+                st.warning("No data available for metrics.", icon="⚠️")
 
     with st.expander("Visualizations", expanded=True):
         st.subheader("Regional Performance")
@@ -259,18 +308,25 @@ def show_simple_mode():
             anomalies = detect_sales_anomalies(ts)
             st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
 
-    st.download_button(
-        label="Download Insights",
-        data=st.session_state.state.data.to_csv(index=False),
-        file_name="demand_insights.csv",
-        mime="text/csv",
-        help="Download a summary of demand data and insights."
-    )
+    if st.session_state.state.data is not None:
+        st.download_button(
+            label="Download Insights",
+            data=st.session_state.state.data.to_csv(index=False),
+            file_name="demand_insights.csv",
+            mime="text/csv",
+            help="Download a summary of demand data and insights."
+        )
 
 # Render Technical Mode dashboard
 def show_technical_mode():
     st.header("Technical Analysis Dashboard")
     st.markdown("Dive into detailed data analysis, model tuning, and diagnostics.")
+
+    # Validate session state
+    if not isinstance(st.session_state.state, SessionState):
+        st.error("Session state is not properly initialized. Reinitializing...", icon="🚨")
+        st.session_state.state = SessionState.get_or_create()
+        st.rerun()
 
     tabs = st.tabs([
         "Data Exploration",

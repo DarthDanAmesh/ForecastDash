@@ -110,10 +110,27 @@ class SessionState:
         """Get the dictionary of forecast results."""
         return self._forecasts
 
+    @forecasts.setter
+    def forecasts(self, value: Dict[str, pd.DataFrame]) -> None:
+        """Set the dictionary of forecast results."""
+        with self._lock:
+            if value is not None and not isinstance(value, dict):
+                st.error("Forecasts must be a dictionary.")
+                return
+            self._forecasts = value
+
     @property
     def model_cache(self) -> Dict[str, Any]:
         """Get the model cache."""
         return self._model_cache
+
+    @model_cache.setter
+    def model_cache(self, value: Dict[str, Any]) -> None:
+        with self._lock:
+            if value is not None and not isinstance(value, dict):
+                st.error("Model cache must be a dictionary.")
+                return
+            self._model_cache = value
 
     @property
     def data_fingerprints(self) -> Dict[str, str]:
