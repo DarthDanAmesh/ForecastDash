@@ -6,7 +6,7 @@ from pygwalker.api.streamlit import init_streamlit_comm, StreamlitRenderer, PreF
 import pandas as pd
 from cls_session_management import SessionState
 
-state = SessionState.get_or_create()
+#state = SessionState.get_or_create()
 
 def show_data_exploration():
     st.header("Data Exploration")

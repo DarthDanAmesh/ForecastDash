@@ -80,8 +80,21 @@ def initialize_session_state():
         st.session_state.state.data_source = "csv"
         st.session_state.state.data = None
         st.session_state.state.processed_data = None
+        st.session_state.state.models = {}  # Ensure models dict exists
+
+    # These should be initialized outside the above block to ensure they always exist
+    if 'mode' not in st.session_state:
         st.session_state.mode = "Simple"
+
+    if 'model_params' not in st.session_state:
         st.session_state.model_params = {"forecast_horizon": 12}
+
+    if 'forecast_generated' not in st.session_state:
+        st.session_state.forecast_generated = False
+
+    if 'current_forecast' not in st.session_state:
+        st.session_state.current_forecast = None
+
 
 # Cache data loading with hashable inputs
 @st.cache_data(show_spinner=False)

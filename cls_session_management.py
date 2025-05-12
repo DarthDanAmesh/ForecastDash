@@ -94,10 +94,16 @@ class SessionState:
                     return
             self._api_config = value
 
+
     @property
     def models(self) -> Dict[str, Any]:
         """Get the dictionary of trained models."""
         return self._models
+
+    @models.setter
+    def models(self, value: Dict[str, Any]) -> None:
+        with self._lock:
+            self._models = value
 
     @property
     def forecasts(self) -> Dict[str, pd.DataFrame]:
