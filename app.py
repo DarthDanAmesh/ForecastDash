@@ -80,9 +80,8 @@ def initialize_session_state():
         st.session_state.state.data_source = "csv"
         st.session_state.state.data = None
         st.session_state.state.processed_data = None
-        st.session_state.state.models = {}  # Ensure models dict exists
+        st.session_state.state.models = {}
 
-    # These should be initialized outside the above block to ensure they always exist
     if 'mode' not in st.session_state:
         st.session_state.mode = "Simple"
 
@@ -95,29 +94,30 @@ def initialize_session_state():
     if 'current_forecast' not in st.session_state:
         st.session_state.current_forecast = None
 
-
 # Cache data loading with hashable inputs
 @st.cache_data(show_spinner=False)
-def cached_load_data(_data_source: str, _file=None, _connection_string: str = "", _api_config: dict = {}) -> Optional[pd.DataFrame]:
+def cached_load_data(_data_source: str, _file=None, _connection_string: str = "", 
+                    _api_config: dict = {}) -> Optional[pd.DataFrame]:
     """Load and validate data with caching"""
     try:
         data = load_data()
         if data is None:
             return None
-        required_cols = [
-            STANDARD_COLUMNS['date'],
-            STANDARD_COLUMNS['demand'],
-            STANDARD_COLUMNS['delivery_date'],
+        required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand']]
+        optional_cols = [
+            STANDARD_COLUMNS['material'], 
+            STANDARD_COLUMNS['country'], 
+            STANDARD_COLUMNS['delivery_date'], 
             STANDARD_COLUMNS['delivery_quantity']
         ]
-        is_valid, message = DataProcessor.validate_columns(data, required_cols)
+        is_valid, message = DataProcessor.validate_columns(data, required_cols, optional_cols)
         if not is_valid:
             st.error(message, icon="🚨")
             st.markdown(
                 """
                 <div class='error-box'>
-                <strong>Need help?</strong> Ensure your file includes columns: date, demand, delivery_date, delivery_quantity. 
-                Supported aliases include 'quantity' for 'demand'. 
+                <strong>Need help?</strong> Ensure your file includes columns: date, demand. 
+                Supported aliases include 'quantity' for 'demand', 'act. gds issue date' for 'delivery_date'. 
                 <a href='#' onclick='st.session_state.show_template = True'>Download a sample template</a>.
                 </div>
                 """, unsafe_allow_html=True
@@ -126,8 +126,8 @@ def cached_load_data(_data_source: str, _file=None, _connection_string: str = ""
                 template_data = pd.DataFrame({
                     'date': ['2023-01-01', '2023-02-01'],
                     'demand': [100, 120],
-                    'delivery_date': ['2023-01-05', '2023-02-06'],
-                    'delivery_quantity': [95, 115]
+                    'material': ['MAT001', 'MAT002'],
+                    'country': ['US', 'US']
                 })
                 st.download_button(
                     label="Download Sample CSV",
@@ -136,6 +136,8 @@ def cached_load_data(_data_source: str, _file=None, _connection_string: str = ""
                     mime="text/csv"
                 )
             return None
+        if message:
+            st.warning(message, icon="⚠️")
         return data
     except Exception as e:
         logger.error(f"Data loading error: {str(e)}")
@@ -154,7 +156,10 @@ def cached_feature_engineering(_data: pd.DataFrame) -> Optional[pd.DataFrame]:
 def validate_time_series(ts: Optional[pd.Series]) -> bool:
     """Check if time series is valid"""
     if ts is None or ts.empty:
-        st.error("Time series data is invalid. Ensure the data contains valid date and demand columns.", icon="🚨")
+        st.error(
+            "Time series data is invalid. Ensure the data contains valid date and demand columns.", 
+            icon="🚨"
+        )
         return False
     return True
 
@@ -200,16 +205,21 @@ def render_sidebar():
                         st.session_state.state.data = cached_feature_engineering(processed_data)
                         st.success("Data loaded and processed successfully!", icon="✅")
                     else:
-                        st.error("Data preprocessing failed. Check column requirements and file format.", icon="🚨")
+                        st.error(
+                            "Data preprocessing failed. Check column requirements and file format.", 
+                            icon="🚨"
+                        )
                 else:
-                    st.error("Failed to load data. Ensure the file is CSV/Excel with required columns.", icon="🚨")
+                    st.error(
+                        "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
+                        icon="🚨"
+                    )
 
 # Render Simple Mode dashboard
 def show_simple_mode():
     st.header("Demand Planning Dashboard")
     st.markdown("Explore key insights and forecasts to optimize inventory.")
 
-    # Two-column layout for overview and metrics
     col1, col2 = st.columns([3, 1])
     with col1:
         with st.expander("Demand Forecast", expanded=True):
@@ -236,7 +246,6 @@ def show_simple_mode():
                 help="Number of unusual demand spikes or drops."
             )
 
-    # Visualizations section
     with st.expander("Visualizations", expanded=True):
         st.subheader("Regional Performance")
         region_performance = analyze_regional_performance(st.session_state.state.data)
@@ -250,7 +259,6 @@ def show_simple_mode():
             anomalies = detect_sales_anomalies(ts)
             st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
 
-    # Download button
     st.download_button(
         label="Download Insights",
         data=st.session_state.state.data.to_csv(index=False),
@@ -264,7 +272,6 @@ def show_technical_mode():
     st.header("Technical Analysis Dashboard")
     st.markdown("Dive into detailed data analysis, model tuning, and diagnostics.")
 
-    # Tabbed interface for technical features
     tabs = st.tabs([
         "Data Exploration",
         "Model Tuning",
@@ -315,7 +322,7 @@ def show_technical_mode():
                                         'Lower Bound', 'Is Anomaly']
                 st.dataframe(anomaly_table)
             else:
-                st.warning("No anomalies detected or anomaly data is incomplete.")
+                st.warning("No anomalies detected or anomaly data is incomplete.", icon="⚠️")
 
     with tabs[5]:
         st.subheader("Discontinued Products")
@@ -352,18 +359,16 @@ def main():
     render_dashboard_header()
     render_sidebar()
 
-    # Check if data is loaded
     if st.session_state.state.data is None:
         st.info(
             """
             Please upload a CSV/Excel file or connect to a data source to begin analysis. 
-            Required columns: date, demand, delivery_date, delivery_quantity.
+            Required columns: date, demand. Optional: material, country.
             """,
             icon="ℹ️"
         )
         return
 
-    # Render mode-specific UI
     if st.session_state.mode == "Simple":
         show_simple_mode()
     else:
