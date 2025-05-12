@@ -1,42 +1,63 @@
 import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from cls_data_preprocessor import DataProcessor
 from cls_forecast_engine import ForecastEngine
 from cls_plots_visuals import Visualizer
 from consts_model import DEFAULT_FORECAST_PERIOD
 from funct_kpi_forecast_metrics import calculate_forecast_accuracy
-
-import traceback
+import logging
 import calendar
-import pandas as pd
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
-# Add to constants.py
+from typing import Optional, Dict
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
 MIN_DATA_POINTS = 3
 ANOMALY_THRESHOLD = 50  # %
 WARNING_THRESHOLD = 5  # % change for trends
 
-
-
+# Cache forecast generation
+@st.cache_data(show_spinner=False)
+def cached_generate_forecast(_ts: pd.Series, model_type: str, forecast_period: int, 
+                           _model_info: Dict) -> Optional[pd.Series]:
+    """Generate and cache forecast for given model and parameters."""
+    try:
+        if model_type == "XGBoost":
+            last_date = _ts.index[-1]
+            forecast = ForecastEngine.forecast_xgboost(
+                _model_info['model'],
+                _model_info['last_values'],
+                forecast_period,
+                last_date
+            )
+        elif model_type == "ARIMA":
+            forecast = ForecastEngine.forecast_arima(
+                _model_info['model'],
+                forecast_period
+            )
+        else:
+            logger.error(f"Unsupported model type: {model_type}")
+            return None
+        return forecast
+    except Exception as e:
+        logger.error(f"Forecast generation failed: {str(e)}")
+        return None
 
 def show_forecasting():
-    st.header("Demand Forecasting")
-
+    """Display forecasting interface for Simple and Technical modes."""
     if st.session_state.state.data is None:
-        st.error("No data loaded. Please load data first.")
+        st.error("No data loaded. Please upload a CSV/Excel file with date and demand columns.")
         return
 
     if len(st.session_state.state.data) < MIN_DATA_POINTS:
-        st.error(f"Insufficient data points (minimum {MIN_DATA_POINTS} required)")
+        st.error(f"At least {MIN_DATA_POINTS} data points are required for forecasting.")
         return
 
-    if not st.session_state.state.models:
-        st.warning("No trained models available. Please train a model first.")
-        return
-
-    # Create tabs for forecast generation and analysis
-    tab1, tab2 = st.tabs(["Generate Forecast", "Analyze Accuracy"])
-    
-    # Initialize session state variables if they don't exist
+    # Initialize session state
     if 'current_forecast' not in st.session_state:
         st.session_state.current_forecast = None
     if 'current_ts' not in st.session_state:
@@ -45,280 +66,272 @@ def show_forecasting():
         st.session_state.forecast_generated = False
     if 'forecast_params' not in st.session_state:
         st.session_state.forecast_params = {'model_type': None, 'forecast_period': None}
-    
+
+    # Prepare time series
+    ts = DataProcessor.prepare_time_series(st.session_state.state.data)
+    if ts is None or ts.empty:
+        st.error("Failed to prepare time series. Ensure the data has valid date and demand columns.")
+        return
+    st.session_state.current_ts = ts
+
+    # Default model for Simple mode
+    default_model = "ARIMA" if "ARIMA" in st.session_state.state.models else None
+    if not st.session_state.state.models:
+        if st.session_state.mode == "Simple":
+            st.warning("No trained models available. Using default ARIMA model.")
+            # Initialize default ARIMA model
+            try:
+                model_info = ForecastEngine.train_arima(ts)
+                st.session_state.state.models["ARIMA"] = model_info
+            except Exception as e:
+                st.error(f"Failed to initialize default model: {str(e)}")
+                return
+        else:
+            st.warning("No trained models available. Please train a model in Model Training.")
+            return
+
+    # UI based on mode
+    if st.session_state.mode == "Simple":
+        show_simple_forecast(ts, default_model)
+    else:
+        show_technical_forecast(ts)
+
+def show_simple_forecast(ts: pd.Series, default_model: str):
+    """Simplified forecasting UI for non-technical users."""
+    st.header("Demand Forecast")
+    st.markdown("View predicted demand and inventory recommendations.")
+
+    model_type = default_model
+    model_info = st.session_state.state.models[model_type]
+    forecast_period = DEFAULT_FORECAST_PERIOD
+
+    if st.session_state.forecast_generated and st.session_state.current_forecast is not None:
+        display_forecast(ts, st.session_state.current_forecast)
+        return
+
+    if st.button("Generate Forecast", type="primary", help="Generate a demand forecast"):
+        with st.spinner("Generating forecast..."):
+            forecast = cached_generate_forecast(ts, model_type, forecast_period, model_info)
+            if forecast is not None:
+                update_forecast_state(model_type, forecast_period, forecast)
+                display_forecast(ts, forecast)
+                st.success("Forecast generated successfully!")
+            else:
+                st.error("Failed to generate forecast. Check data or model settings.")
+
+def show_technical_forecast(ts: pd.Series):
+    """Detailed forecasting UI for technical users."""
+    st.header("Demand Forecasting")
+    st.markdown("Generate forecasts, tune parameters, and analyze accuracy.")
+
+    tab1, tab2 = st.tabs(["Generate Forecast", "Analyze Accuracy"])
+
     with tab1:
-        model_type = st.selectbox("Select Model for Forecasting", list(st.session_state.state.models.keys()), key="forecast_model_select")
+        model_type = st.selectbox("Select Model", list(st.session_state.state.models.keys()), 
+                                 key="forecast_model_select")
         model_info = st.session_state.state.models[model_type]
+        forecast_period = st.number_input("Forecast Period (months)", min_value=1, max_value=24, 
+                                        value=DEFAULT_FORECAST_PERIOD, key="forecast_period_input")
 
-        forecast_period = st.number_input("Forecast Period (months)", min_value=1, max_value=24, value=DEFAULT_FORECAST_PERIOD, key="forecast_period_input")
-
-        # Check if parameters have changed from the last forecast
         params_changed = (model_type != st.session_state.forecast_params['model_type'] or 
                          forecast_period != st.session_state.forecast_params['forecast_period'])
-        
         if params_changed and st.session_state.forecast_generated:
-            st.warning("Forecast parameters changed. Click 'Generate Forecast' to update.")
+            st.warning("Parameters changed. Click 'Generate Forecast' to update.")
             st.session_state.forecast_generated = False
 
         if forecast_period > 12:
-            st.warning("Long forecast periods may impact performance. Consider smaller increments.")
-            proceed_anyway = st.checkbox("Proceed anyway", key="proceed_checkbox")
-            if not proceed_anyway:
-                pass  # Don't return, just continue
+            st.warning("Long forecast periods may reduce accuracy. Consider shorter horizons.")
+            proceed = st.checkbox("Proceed anyway", key="proceed_checkbox")
+            if not proceed:
+                return
 
-        # Always display existing forecast if available
         if st.session_state.forecast_generated and st.session_state.current_forecast is not None and not params_changed:
-            st.success("Forecast already generated")
-            st.subheader("Demand Forecast")
-            st.plotly_chart(Visualizer.plot_forecast(st.session_state.current_ts, st.session_state.current_forecast))
-            st.write("Forecast Values:")
-            st.dataframe(st.session_state.current_forecast.to_frame(name='Forecast'))
-        
-        if st.button("Generate Forecast", key="generate_forecast_button"):
+            display_forecast(ts, st.session_state.current_forecast)
+        elif st.button("Generate Forecast", key="generate_forecast_button"):
             with st.spinner("Generating forecast..."):
-                try:
-                    df = st.session_state.state.data
-                    ts = DataProcessor.prepare_time_series(df)
-                    # Store time series in session state
-                    st.session_state.current_ts = ts
-                    
-                    if model_type == "XGBoost":
-                        last_date = ts.index[-1]
-                        forecast = ForecastEngine.forecast_xgboost(
-                            model_info['model'],
-                            model_info['last_values'],
-                            forecast_period,
-                            last_date
-                        )
+                forecast = cached_generate_forecast(ts, model_type, forecast_period, model_info)
+                if forecast is not None:
+                    update_forecast_state(model_type, forecast_period, forecast)
+                    display_forecast(ts, forecast)
+                    st.success("Forecast generated successfully!")
+                else:
+                    st.error("Failed to generate forecast. Check model or data settings.")
 
-                    elif model_type == "ARIMA":
-                        forecast = ForecastEngine.forecast_arima(
-                            model_info['model'], 
-                            forecast_period
-                        )
-                
-                    # Update forecast parameters in session state
-                    st.session_state.forecast_params = {'model_type': model_type, 'forecast_period': forecast_period}
-                    
-                    # Store all forecast data in session state
-                    st.session_state.state.forecasts[model_type] = {
-                        'forecast': forecast,
-                        'timestamp': pd.Timestamp.now()
-                    }
-                    st.session_state.current_forecast = forecast
-                    st.session_state.forecast_generated = True
-
-                    # Store for accuracy analysis
-                    st.session_state.state.last_forecast = {
-                        'type': model_type,
-                        'period': forecast_period,
-                        'data': forecast
-                    }
-
-                    st.success("Forecast generated successfully")
-                    st.subheader("Demand Forecast")
-                    st.plotly_chart(Visualizer.plot_forecast(ts, forecast))
-                    st.write("Forecast Values:")
-                    st.dataframe(forecast.to_frame(name='Forecast'))
-                    
-                except Exception as e:
-                    st.error(f"Forecast failed: {str(e)}")
-                    st.code(traceback.format_exc())
-    
     with tab2:
         if not st.session_state.forecast_generated or st.session_state.current_forecast is None:
-            st.warning("No forecast available for analysis. Please generate a forecast first in the 'Generate Forecast' tab.")
+            st.warning("No forecast available. Generate a forecast in the 'Generate Forecast' tab.")
             return
-        
-        st.subheader("Historical Forecast Accuracy Analysis")
-        
-        # Use data from session state
-        if hasattr(st.session_state.state, 'last_forecast'):
-            forecast = st.session_state.state.last_forecast
-            model_type = forecast['type']
-            forecast_period = forecast['period']
-        else:
-            # Fallback if state object doesn't have last_forecast
-            model_type = list(st.session_state.state.models.keys())[0]
-            forecast_period = DEFAULT_FORECAST_PERIOD
-        
-        ts = st.session_state.current_ts
-        
-        if ts is None or len(ts) < MIN_DATA_POINTS:
-            st.warning("Insufficient historical data for accuracy analysis.")
-            return
-            
-        model_info = st.session_state.state.models[model_type]
-        time_options = ["Last 3 months", "Last 6 months", "Last 12 months", "All available data"]
-        selected_period = st.selectbox("Select Time Period for Analysis", time_options, key="time_period_select")
-        months = {"Last 3 months": 3, "Last 6 months": 6, "Last 12 months": 12}.get(selected_period, len(ts))
-        months = min(months, len(ts))
+        analyze_forecast_accuracy(ts, st.session_state.forecast_params['model_type'], 
+                                st.session_state.forecast_params['forecast_period'])
 
-        if st.button("Analyze Forecast Accuracy", key="analyze_accuracy_button"):
-            with st.spinner("Analyzing forecast accuracy..."):
-                try:
-                    analysis_data = ts[-months:] if months < len(ts) else ts
+def display_forecast(ts: pd.Series, forecast: pd.Series):
+    """Display forecast plot and data."""
+    st.subheader("Demand Forecast")
+    st.plotly_chart(Visualizer.plot_forecast(ts, forecast), use_container_width=True)
+    st.write("Forecast Values:")
+    st.dataframe(forecast.to_frame(name='Forecast'))
+    st.download_button(
+        label="Download Forecast",
+        data=forecast.to_frame(name='Forecast').to_csv(),
+        file_name="forecast.csv",
+        mime="text/csv",
+        help="Download the forecast data as CSV."
+    )
 
-                    if len(analysis_data) < MIN_DATA_POINTS + 1:
-                        st.warning("Insufficient data points for selected period.")
-                        return
+def update_forecast_state(model_type: str, forecast_period: int, forecast: pd.Series):
+    """Update session state with forecast data."""
+    st.session_state.forecast_params = {'model_type': model_type, 'forecast_period': forecast_period}
+    st.session_state.current_forecast = forecast
+    st.session_state.forecast_generated = True
+    st.session_state.state.forecasts[model_type] = {
+        'forecast': forecast,
+        'timestamp': pd.Timestamp.now()
+    }
+    st.session_state.state.last_forecast = {
+        'type': model_type,
+        'period': forecast_period,
+        'data': forecast
+    }
 
-                    accuracy_metrics = pd.DataFrame()
-                    min_training_size = MIN_DATA_POINTS
+@st.cache_data(show_spinner=False)
+def cached_analyze_accuracy(_ts: pd.Series, model_type: str, forecast_period: int, 
+                          months: int, _model_info: Dict) -> Optional[pd.DataFrame]:
+    """Analyze forecast accuracy for a given period."""
+    try:
+        analysis_data = _ts[-months:] if months < len(_ts) else _ts
+        if len(analysis_data) < MIN_DATA_POINTS + 1:
+            return None
 
-                    # Use your calculate_forecast_accuracy function for each time step
-                    for i in range(min_training_size, len(analysis_data)):
-                        train_data = analysis_data.iloc[:i]
-                        test_point = analysis_data.iloc[i]
+        accuracy_metrics = pd.DataFrame()
+        min_training_size = MIN_DATA_POINTS
 
-                        if model_type == "XGBoost":
-                            train_data_subset = analysis_data.iloc[:i]
-                            df_features = train_data_subset.to_frame()  # Convert to DataFrame
-                            target_col = df_features.columns[0]  # Get the column name from DataFrame
-                            
-                            # Generate features
-                            features_df = ForecastEngine.create_features(df_features, target_col)
-                            X_features = features_df.drop(columns=[target_col, 'date'])
-                            
-                            # Safeguard against empty features
-                            if X_features.empty:
-                                st.error(f"Feature generation failed for i={i}. Skipping this iteration.")
-                                continue  # Skip this iteration
-                            
-                            last_features = X_features.iloc[-1].values  # Now safe
-                            last_date = train_data_subset.index[-1]
-                            pred = ForecastEngine.forecast_xgboost(
-                                model_info['model'],
-                                last_features,
-                                1,
-                                last_date
-                            ).iloc[0]
-                        elif model_type == "ARIMA":
-                            pred = ForecastEngine.forecast_arima(model_info['model'], 1).iloc[0]
-                        else:
-                            continue
+        for i in range(min_training_size, len(analysis_data)):
+            train_data = analysis_data.iloc[:i]
+            test_point = analysis_data.iloc[i]
 
-                        actual = test_point
-                        
-                        # Create mini-series for the accuracy calculation
-                        actuals_series = pd.Series([actual], index=[analysis_data.index[i]])
-                        forecast_series = pd.Series([pred], index=[analysis_data.index[i]])
-                        
-                        # Calculate accuracy for this point
-                        point_accuracy = calculate_forecast_accuracy(actuals_series, forecast_series, level='monthly')
-                        
-                        # Add date information
-                        point_accuracy['Month'] = analysis_data.index[i]
-                        
-                        # Check if it's an anomaly
-                        is_anomaly = point_accuracy['Accuracy_Pct'].iloc[0] < ANOMALY_THRESHOLD
-                        point_accuracy['Is_Anomaly'] = is_anomaly
-                        
-                        # Append to the metrics dataframe
-                        accuracy_metrics = pd.concat([accuracy_metrics, point_accuracy], ignore_index=True)
+            if model_type == "XGBoost":
+                train_data_subset = analysis_data.iloc[:i]
+                df_features = train_data_subset.to_frame()
+                target_col = df_features.columns[0]
+                features_df = ForecastEngine.create_features(df_features, target_col)
+                X_features = features_df.drop(columns=[target_col, 'date'])
+                if X_features.empty:
+                    logger.warning(f"Empty features at i={i}")
+                    continue
+                last_features = X_features.iloc[-1].values
+                last_date = train_data_subset.index[-1]
+                pred = ForecastEngine.forecast_xgboost(
+                    _model_info['model'], last_features, 1, last_date
+                ).iloc[0]
+            elif model_type == "ARIMA":
+                pred = ForecastEngine.forecast_arima(_model_info['model'], 1).iloc[0]
+            else:
+                continue
 
-                    # Error_Pct column added to the df
-                    accuracy_metrics['Error_Pct'] = 100 - accuracy_metrics['Accuracy_Pct']
+            actual = test_point
+            actuals_series = pd.Series([actual], index=[analysis_data.index[i]])
+            forecast_series = pd.Series([pred], index=[analysis_data.index[i]])
+            point_accuracy = calculate_forecast_accuracy(actuals_series, forecast_series, level='monthly')
+            point_accuracy['Month'] = analysis_data.index[i]
+            point_accuracy['Is_Anomaly'] = point_accuracy['Accuracy_Pct'].iloc[0] < ANOMALY_THRESHOLD
+            accuracy_metrics = pd.concat([accuracy_metrics, point_accuracy], ignore_index=True)
 
-                    # Store metrics for charts and calculations
-                    accuracy_numeric = accuracy_metrics['Accuracy_Pct'].copy()
-                    error_numeric = accuracy_metrics['Error_Pct'].copy()
-                    
-                    # Display summary metrics first
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Average Accuracy", f"{accuracy_numeric.mean():.2f}%")
-                    col2.metric("Average Error", f"{error_numeric.mean():.2f}%")
-                    col3.metric("Anomalies Detected", f"{accuracy_metrics['Is_Anomaly'].sum()}/{len(accuracy_metrics)}")
+        accuracy_metrics['Error_Pct'] = 100 - accuracy_metrics['Accuracy_Pct']
+        return accuracy_metrics
+    except Exception as e:
+        logger.error(f"Accuracy analysis failed: {str(e)}")
+        return None
 
-                    # Display charts and detailed metrics
-                    st.subheader("Monthly Forecast Accuracy")
-                    fig = create_enhanced_accuracy_chart(accuracy_metrics)
-                    st.plotly_chart(fig)
+def analyze_forecast_accuracy(ts: pd.Series, model_type: str, forecast_period: int):
+    """Display forecast accuracy analysis."""
+    st.subheader("Historical Forecast Accuracy")
+    model_info = st.session_state.state.models[model_type]
+    time_options = ["Last 3 months", "Last 6 months", "Last 12 months", "All available data"]
+    selected_period = st.selectbox("Select Time Period", time_options, key="time_period_select")
+    months = {"Last 3 months": 3, "Last 6 months": 6, "Last 12 months": 12}.get(selected_period, len(ts))
+    months = min(months, len(ts))
 
-                    st.subheader("Detailed Accuracy Metrics")
-                    # Create a copy for display formatting
-                    display_metrics = accuracy_metrics.copy()
-                    display_metrics['Month'] = pd.to_datetime(display_metrics['Month']).dt.strftime('%b %Y')
-                    display_metrics['Accuracy_Pct'] = display_metrics['Accuracy_Pct'].round(2).astype(str) + '%'
-                    display_metrics['MAPE'] = display_metrics['MAPE'].round(2).astype(str) + '%'
+    if st.button("Analyze Accuracy", key="analyze_accuracy_button"):
+        with st.spinner("Analyzing accuracy..."):
+            accuracy_metrics = cached_analyze_accuracy(ts, model_type, forecast_period, months, model_info)
+            if accuracy_metrics is None or accuracy_metrics.empty:
+                st.warning("Insufficient data for accuracy analysis.")
+                return
 
-                    st.dataframe(
-                        display_metrics.style.apply(
-                            lambda row: ['background-color: #ffcccc' if row['Is_Anomaly'] else '' for _ in row],
-                            axis=1
-                        )
-                    )
+            accuracy_numeric = accuracy_metrics['Accuracy_Pct'].copy()
+            error_numeric = accuracy_metrics['Error_Pct'].copy()
 
-                    # Calculate overall accuracy
-                    overall_accuracy = calculate_forecast_accuracy(
-                        pd.Series(accuracy_metrics['Actual'].values, index=accuracy_metrics['Month']),
-                        pd.Series(accuracy_metrics['Forecast'].values, index=accuracy_metrics['Month'])
-                    )
-                    
-                    st.subheader("Overall Forecast Performance")
-                    st.info(f"Overall MAPE: {overall_accuracy['MAPE'].iloc[0]:.2f}%, Overall Accuracy: {overall_accuracy['Accuracy_Pct'].iloc[0]:.2f}%")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Average Accuracy", f"{accuracy_numeric.mean():.2f}%")
+            col2.metric("Average Error", f"{error_numeric.mean():.2f}%")
+            col3.metric("Anomalies Detected", f"{accuracy_metrics['Is_Anomaly'].sum()}/{len(accuracy_metrics)}")
 
-                    # Trend analysis with numeric data
-                    if len(accuracy_metrics) >= 3:
-                        st.subheader("Error Pattern Analysis")
-                        trend = accuracy_numeric.iloc[-3:].mean() - accuracy_numeric.iloc[:3].mean()
-                        if trend > WARNING_THRESHOLD:
-                            st.success("✓ Forecast accuracy shows an improving trend.")
-                        elif trend < -WARNING_THRESHOLD:
-                            st.error("⚠ Forecast accuracy shows a declining trend - model may need retraining.")
-                        else:
-                            st.info("ℹ Forecast accuracy is relatively stable.")
+            st.subheader("Monthly Forecast Accuracy")
+            st.plotly_chart(create_enhanced_accuracy_chart(accuracy_metrics))
 
-                    # Monthly analysis with numeric data
-                    if len(accuracy_metrics) >= 12:
-                        month_obj = pd.to_datetime(accuracy_metrics['Month'])
-                        month_num = month_obj.dt.month
-                        monthly_avgs = pd.DataFrame({'Month_Num': month_num, 'Accuracy': accuracy_numeric}).groupby('Month_Num')['Accuracy'].mean()
-                        problem_months = monthly_avgs[monthly_avgs < monthly_avgs.mean() - WARNING_THRESHOLD].index
-                        if len(problem_months) > 0:
-                            month_names = [calendar.month_name[m] for m in problem_months]
-                            st.warning(f"⚠ Lower accuracy detected in: {', '.join(month_names)}. Consider seasonal adjustments.")
+            st.subheader("Detailed Metrics")
+            display_metrics = accuracy_metrics.copy()
+            display_metrics['Month'] = pd.to_datetime(display_metrics['Month']).dt.strftime('%b %Y')
+            display_metrics['Accuracy_Pct'] = display_metrics['Accuracy_Pct'].round(2).astype(str) + '%'
+            display_metrics['MAPE'] = display_metrics['MAPE'].round(2).astype(str) + '%'
+            st.dataframe(
+                display_metrics.style.apply(
+                    lambda row: ['background-color: #ffcccc' if row['Is_Anomaly'] else '' for _ in row], axis=1
+                )
+            )
 
-                    # Confidence gauge with numeric data
-                    st.subheader(f"Forecast Confidence Analysis (for {forecast_period}-month forecast)")
-                    confidence = min(95, max(50, accuracy_numeric.mean()))
-                    fig = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=confidence,
-                        title={'text': "Forecast Confidence Level"},
-                        gauge={
-                            'axis': {'range': [None, 100]},
-                            'bar': {'color': "darkblue"},
-                            'steps': [
-                                {'range': [0, 50], 'color': "red"},
-                                {'range': [50, 80], 'color': "orange"},
-                                {'range': [80, 100], 'color': "green"}
-                            ],
-                            'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': confidence}
-                        }
-                    ))
-                    fig.update_layout(height=300)
-                    st.plotly_chart(fig)
+            overall_accuracy = calculate_forecast_accuracy(
+                pd.Series(accuracy_metrics['Actual'].values, index=accuracy_metrics['Month']),
+                pd.Series(accuracy_metrics['Forecast'].values, index=accuracy_metrics['Month'])
+            )
+            st.subheader("Overall Performance")
+            st.info(f"Overall MAPE: {overall_accuracy['MAPE'].iloc[0]:.2f}%, "
+                    f"Accuracy: {overall_accuracy['Accuracy_Pct'].iloc[0]:.2f}%")
 
-                    if confidence >= 80:
-                        st.success(f"✓ High confidence in the {forecast_period}-month forecast.")
-                    elif confidence >= 60:
-                        st.info(f"ℹ Moderate confidence in the {forecast_period}-month forecast. Consider shorter horizon.")
-                    else:
-                        st.error(f"⚠ Low confidence in the {forecast_period}-month forecast. Consider retraining model.")
+            if len(accuracy_metrics) >= 3:
+                st.subheader("Error Pattern Analysis")
+                trend = accuracy_numeric.iloc[-3:].mean() - accuracy_numeric.iloc[:3].mean()
+                if trend > WARNING_THRESHOLD:
+                    st.success("✓ Forecast accuracy improving.")
+                elif trend < -WARNING_THRESHOLD:
+                    st.error("⚠ Forecast accuracy declining. Consider retraining.")
+                else:
+                    st.info("ℹ Forecast accuracy stable.")
 
-                except Exception as e:
-                    st.error(f"Error analyzing forecast accuracy: {str(e)}")
-                    st.error(traceback.format_exc())
+            if len(accuracy_metrics) >= 12:
+                st.subheader("Seasonal Analysis")
+                month_obj = pd.to_datetime(accuracy_metrics['Month'])
+                month_num = month_obj.dt.month
+                monthly_avgs = pd.DataFrame({'Month_Num': month_num, 'Accuracy': accuracy_numeric})
+                monthly_avgs = monthly_avgs.groupby('Month_Num')['Accuracy'].mean()
+                problem_months = monthly_avgs[monthly_avgs < monthly_avgs.mean() - WARNING_THRESHOLD].index
+                if problem_months.any():
+                    month_names = [calendar.month_name[m] for m in problem_months]
+                    st.warning(f"⚠ Lower accuracy in: {', '.join(month_names)}. Consider seasonal adjustments.")
 
+            st.subheader(f"Forecast Confidence ({forecast_period}-month)")
+            confidence = min(95, max(50, accuracy_numeric.mean()))
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=confidence,
+                title={'text': "Forecast Confidence Level"},
+                gauge={
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [0, 50], 'color': "red"},
+                        {'range': [50, 80], 'color': "orange"},
+                        {'range': [80, 100], 'color': "green"}
+                    ],
+                    'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': confidence}
+                }
+            ))
+            fig.update_layout(height=300)
+            st.plotly_chart(fig)
 
-def create_enhanced_accuracy_chart(accuracy_df):
-    if not pd.api.types.is_datetime64_any_dtype(accuracy_df['Month']):
-        accuracy_df['Month'] = pd.to_datetime(accuracy_df['Month'])
-
-    accuracy_df['Accuracy_Pct'] = pd.to_numeric(accuracy_df['Accuracy_Pct'], errors='coerce')
-    accuracy_df['Error_Pct'] = pd.to_numeric(accuracy_df['Error_Pct'], errors='coerce')
-
+def create_enhanced_accuracy_chart(accuracy_df: pd.DataFrame) -> go.Figure:
+    """Create a chart for forecast accuracy analysis."""
+    accuracy_df['Month'] = pd.to_datetime(accuracy_df['Month'])
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     fig.add_trace(go.Scatter(
@@ -331,15 +344,14 @@ def create_enhanced_accuracy_chart(accuracy_df):
         name='Error %', marker_color='rgba(255, 0, 0, 0.6)'
     ), secondary_y=True)
 
-    anomalies = accuracy_df[accuracy_df['Is_Anomaly'] == True]
+    anomalies = accuracy_df[accuracy_df['Is_Anomaly']]
     if not anomalies.empty:
         fig.add_trace(go.Scatter(
             x=anomalies['Month'], y=anomalies['Accuracy_Pct'],
             mode='markers', marker=dict(symbol='x', size=12, color='red', line=dict(width=2, color='black')),
             name='Anomalies'
         ), secondary_y=False)
-
-        for i, row in anomalies.iterrows():
+        for _, row in anomalies.iterrows():
             fig.add_annotation(
                 x=row['Month'], y=row['Accuracy_Pct'],
                 text=f"Anomaly: {row['Accuracy_Pct']:.1f}%",
@@ -352,71 +364,11 @@ def create_enhanced_accuracy_chart(accuracy_df):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(t=70, b=30, l=30, r=30)
     )
-
     fig.update_yaxes(title_text="Accuracy %", secondary_y=False, range=[0, 100])
     fig.update_yaxes(title_text="Error %", secondary_y=True, range=[0, 100])
     fig.update_xaxes(title_text="Month")
-
-    fig.add_shape(
-        type="line", line=dict(dash="dash", width=1, color="orange"),
-        y0=80, y1=80, x0=0, x1=1, xref="paper", yref="y"
-    )
-    fig.add_annotation(
-        x=0.01, y=80, xref="paper", yref="y",
-        text="Acceptable Threshold (80%)",
-        showarrow=False, font=dict(size=10, color="orange")
-    )
-
+    fig.add_shape(type="line", line=dict(dash="dash", width=1, color="orange"),
+                  y0=80, y1=80, x0=0, x1=1, xref="paper", yref="y")
+    fig.add_annotation(x=0.01, y=80, xref="paper", yref="y",
+                      text="Acceptable Threshold (80%)", showarrow=False, font=dict(size=10, color="orange"))
     return fig
-
-
-def show_forecasting_deprec():
-    st.header("Demand Forecasting")
-    
-    if not st.session_state.state.models:
-        st.warning("No trained models available. Please train a model first.")
-        return
-    
-    model_type = st.selectbox("Select Model for Forecasting", 
-                             list(st.session_state.state.models.keys()))
-    
-    model_info = st.session_state.state.models[model_type]
-    forecast_period = st.number_input(
-                                        "Forecast Period (months)", 
-                                        min_value=1, max_value=24, 
-                                        value=DEFAULT_FORECAST_PERIOD,
-                                        key="forecast_period_input"
-                                    )
-    
-
-    
-    
-    if st.button("Generate Forecast"):
-        with st.spinner("Generating forecast..."):
-            df = st.session_state.state.data
-            ts = DataProcessor.prepare_time_series(df)
-            
-            if model_type == "XGBoost":
-                last_date = DataProcessor.prepare_time_series(df).index[-1]
-                forecast = ForecastEngine.forecast_xgboost(
-                    model_info['model'],
-                    model_info['last_values'],
-                    forecast_period,
-                    last_date
-                )
-
-            elif model_type == "ARIMA":
-                forecast = ForecastEngine.forecast_arima(
-                    model_info['model'], 
-                    forecast_period
-                )
-            
-            st.session_state.state.forecasts[model_type] = forecast
-            
-            # Show forecast
-            st.subheader("Demand Forecast")
-            st.plotly_chart(Visualizer.plot_forecast(ts, forecast))
-            
-            # Show forecast values
-            st.write("Forecast Values:")
-            st.dataframe(forecast.to_frame(name='Forecast'))
