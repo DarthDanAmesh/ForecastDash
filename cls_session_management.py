@@ -186,3 +186,10 @@ class SessionState:
             if self._connection_string is not None and not isinstance(self._connection_string, str):
                 return False, "Invalid connection string: Must be a string."
             return True, ""
+
+    @classmethod
+    def get_or_create(cls):
+        """Get the current session state or create a new one if it doesn't exist."""
+        if 'state' not in st.session_state or not isinstance(st.session_state.state, cls):
+            st.session_state.state = cls()
+        return st.session_state.state

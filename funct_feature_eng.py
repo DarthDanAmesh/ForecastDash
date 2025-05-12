@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import logging
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -136,16 +137,32 @@ def enhance_feature_engineering(df):
     if order_date_col and delivery_date_col:
         logger.info(f"Using '{order_date_col}' and '{delivery_date_col}' for delivery gap analysis")
         try:
-            # Ensure both columns are datetime
+            # Ensure both columns are datetime, the infer_datetime_format=True is used for faster parsing for non-standard date formats
             df[order_date_col] = pd.to_datetime(df[order_date_col], errors='coerce')
             df[delivery_date_col] = pd.to_datetime(df[delivery_date_col], errors='coerce')
             
-            # Calculate days between order and delivery
-            df['order_to_delivery_days'] = (df[delivery_date_col] - df[order_date_col]).dt.days
+            # Calculate days between order and delivery with validation
+            valid_dates_mask = df[order_date_col].notna() & df[delivery_date_col].notna()
+            df['order_to_delivery_days'] = np.where(
+                valid_dates_mask,
+                (df[delivery_date_col] - df[order_date_col]).dt.days,
+                np.nan
+            )
             
-            # Handle invalid calculations
-            if df['order_to_delivery_days'].isna().any():
-                logger.warning(f"{df['order_to_delivery_days'].isna().sum()} rows have invalid order-to-delivery days")
+            # Additional validation for negative values
+            negative_mask = df['order_to_delivery_days'] < 0
+            if negative_mask.any():
+                logger.warning(f"{negative_mask.sum()} rows have negative order-to-delivery days")
+                st.warning(f"Found {negative_mask.sum()} rows where delivery occurred before order.")
+                df.loc[negative_mask, 'order_to_delivery_days'] = np.nan
+            
+            # Report invalid calculations
+            invalid_count = df['order_to_delivery_days'].isna().sum()
+            if invalid_count > 0:
+                logger.warning(f"{invalid_count} rows have invalid order-to-delivery days")
+                # Optionally log first few invalid rows for debugging
+                invalid_rows = df[df['order_to_delivery_days'].isna()][[order_date_col, delivery_date_col]].head(2)
+                logger.debug(f"Sample invalid rows:\n{invalid_rows}")
             
             logger.info("Created order_to_delivery_days feature")
         except Exception as e:

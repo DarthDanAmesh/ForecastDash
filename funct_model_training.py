@@ -7,6 +7,9 @@ from cls_forecast_engine import ForecastEngine
 from cls_data_preprocessor import DataProcessor
 from cls_model_trainer import ModelTrainer
 from funct_plot_predictions import plot_predictions
+from cls_session_management import SessionState
+
+state = SessionState.get_or_create()
 
 def validate_training_data(ts: pd.Series, min_length: int = 12) -> tuple[bool, str]:
     """

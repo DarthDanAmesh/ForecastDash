@@ -259,3 +259,4 @@ class DataProcessor:
         except Exception as e:
             st.error(f"Error preparing time series: {str(e)}. Please verify the data and parameters.")
             return None
+

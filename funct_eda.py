@@ -2,10 +2,11 @@ import streamlit as st
 from cls_data_preprocessor import DataProcessor
 from cls_plots_visuals import Visualizer
 from consts_model import COUNTRY_CODE_MAP
-
-from typing import List
 from pygwalker.api.streamlit import init_streamlit_comm, StreamlitRenderer, PreFilter
 import pandas as pd
+from cls_session_management import SessionState
+
+state = SessionState.get_or_create()
 
 def show_data_exploration():
     st.header("Data Exploration")
@@ -26,23 +27,30 @@ def show_data_exploration():
     # Data summary
     st.subheader("Data Summary")
     st.write(f"Total Records: {len(df)}")
-    st.write(f"Date Range: {df['Created On'].min()} to {df['Created On'].max()}")
+    st.write(f"Date Range: {df['date'].min()} to {df['date'].max()}")
     
-    # Traditional plots section for quick insights
-    with st.expander("Quick Insights"):
+    # Quick insights section - now using columns instead of nested expander
+    st.subheader("Quick Insights")
+    col1, col2 = st.columns(2)
+    
+    with col1:
         # Time series plot
         ts = DataProcessor.prepare_time_series(df)
         if ts is not None:
-            st.plotly_chart(Visualizer.plot_time_series(ts, "Delivery Quantity Over Time"))
-        
+            st.plotly_chart(Visualizer.plot_time_series(ts, "Delivery Quantity Over Time"), 
+                          use_container_width=True)
+    
+    with col2:
         # Geographical distribution
         if 'Country Key Ship-to' in df.columns:
-            st.plotly_chart(Visualizer.plot_geographical(df))
-        
-        # Product performance
-        if 'Material Group' in df.columns:
-            st.plotly_chart(Visualizer.plot_product_performance(df))
+            st.plotly_chart(Visualizer.plot_geographical(df), 
+                          use_container_width=True)
     
+    # Product performance below the columns
+    if 'Material Group' in df.columns:
+        st.plotly_chart(Visualizer.plot_product_performance(df), 
+                      use_container_width=True)
+
     # Advanced Interactive Visualization with pygwalker
     st.subheader("Interactive Data Exploration")
     
@@ -53,12 +61,12 @@ def show_data_exploration():
     
     renderer = get_pyg_renderer()
     
-    # Create filters for key dimensions
+    # Create filters section
+    st.subheader("Filters")
     filter_cols = []
     pre_filters = []
     
     # Add Country filter if available
-        # Filter by country full names instead of codes
     if 'Country Key Ship-to' in df.columns:
         available_codes = df['Country Key Ship-to'].dropna().unique().tolist()
         code_to_name = {code: COUNTRY_CODE_MAP.get(code, code) for code in available_codes}
@@ -88,9 +96,9 @@ def show_data_exploration():
             ))
     
     # Add date range filter
-    if 'Created On' in df.columns:
-        min_date = df['Created On'].min().date()
-        max_date = df['Created On'].max().date()
+    if 'date' in df.columns:
+        min_date = df['date'].min().date()
+        max_date = df['date'].max().date()
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input("Start Date", min_date)
@@ -99,7 +107,7 @@ def show_data_exploration():
         
         if start_date and end_date:
             pre_filters.append(PreFilter(
-                field="Created On",
+                field="date",
                 op="temporal range",
                 value=[str(start_date), str(end_date)]
             ))
@@ -115,25 +123,17 @@ def show_data_exploration():
     ])
     
     # Populate tabs with relevant visualizations
-    # Note: You'll need to create and save these chart configurations
-    # using renderer.render_explore() first, then use the chart indices
-    
     with geo_tab:
         st.subheader("Geographical Distribution")
-        # Assuming chart index 0 is geographical visualization
         try:
             renderer.chart(0)  # Distribution by country
         except:
             st.info("Create geographical charts first using the Explore UI")
             
-        # You could add a second visualization here
-        # renderer.chart(1)  # Another geographical insight
-    
     with product_tab:
         st.subheader("Product Analysis")
         col1, col2 = st.columns(2)
         with col1:
-            # Assuming chart indices 2 and 3 are product visualizations
             try:
                 renderer.chart(2)  # Top products by quantity
             except:
@@ -148,7 +148,6 @@ def show_data_exploration():
         st.subheader("Procurement Analysis")
         col1, col2 = st.columns(2)
         with col1:
-            # Assuming chart indices 6 and 7 are procurement visualizations
             try:
                 renderer.chart(6)  # Analysis by procurement type
             except:
@@ -163,41 +162,3 @@ def show_data_exploration():
     if st.checkbox("Advanced Chart Builder (for analysts)"):
         st.subheader("Custom Chart Builder")
         renderer.explorer()
-
-
-#--------------------------------------------------------------------
-#deprecated   
-#--------------------------------------------------------------------
-#deprecated        
-def show_data_exploration_depr():
-    st.header("Data Exploration")
-    
-    if st.session_state.state.data is None:
-        st.warning("No data loaded. Please configure and load data first.")
-        return
-    
-    df = st.session_state.state.data
-    
-    # Show raw data
-    if st.checkbox("Show Raw Data"):
-        st.dataframe(df)
-    
-    # Data summary
-    st.subheader("Data Summary")
-    st.write(f"Total Records: {len(df)}")
-    st.write(f"Date Range: {df['Created On'].min()} to {df['Created On'].max()}")
-    
-    # Time series plot
-    ts = DataProcessor.prepare_time_series(df)
-    if ts is not None:
-        st.plotly_chart(Visualizer.plot_time_series(ts, "Delivery Quantity Over Time"))
-    
-    # Geographical distribution
-    if 'Country Key Ship-to' in df.columns:
-        st.plotly_chart(Visualizer.plot_geographical(df))
-    
-    # Product performance
-    if 'Material Group' in df.columns:
-        st.plotly_chart(Visualizer.plot_product_performance(df))
-
-
