@@ -21,20 +21,50 @@ from column_config import STANDARD_COLUMNS
 # Configuration
 st.set_page_config(page_title="Product Demand Toolkit", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for improved UI
+# Custom CSS for modern, consistent styling
 st.markdown("""
     <style>
-    .main { padding: 20px; }
-    .stButton > button { width: 100%; font-size: 16px; }
-    .st-expander { border: 1px solid #e0e0e0; border-radius: 5px; margin-bottom: 10px; }
+    .main { padding: 2rem; background-color: #f9fafb; }
+    .stButton > button { 
+        width: 100%; 
+        padding: 10px; 
+        font-size: 16px; 
+        border-radius: 8px; 
+        background-color: #2563eb; 
+        color: white; 
+        border: none; 
+    }
+    .stButton > button:hover { background-color: #1e40af; }
+    .st-expander { 
+        border: 1px solid #e5e7eb; 
+        border-radius: 8px; 
+        margin-bottom: 1rem; 
+        background-color: white; 
+    }
     .tooltip { position: relative; display: inline-block; cursor: help; }
     .tooltip .tooltiptext { 
-        visibility: hidden; width: 200px; background-color: #555; color: #fff; 
-        text-align: center; border-radius: 6px; padding: 5px; position: absolute; 
-        z-index: 1; bottom: 125%; left: 50%; margin-left: -100px; 
-        opacity: 0; transition: opacity 0.3s; 
+        visibility: hidden; 
+        width: 220px; 
+        background-color: #374151; 
+        color: #fff; 
+        text-align: center; 
+        border-radius: 6px; 
+        padding: 8px; 
+        position: absolute; 
+        z-index: 1; 
+        bottom: 125%; 
+        left: 50%; 
+        margin-left: -110px; 
+        opacity: 0; 
+        transition: opacity 0.3s; 
     }
     .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
+    .error-box { 
+        background-color: #fee2e2; 
+        padding: 1rem; 
+        border-radius: 8px; 
+        border: 1px solid #ef4444; 
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -42,32 +72,61 @@ st.markdown("""
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize session state
-if 'state' not in st.session_state:
-    logger.info("Initializing SessionState")
-    st.session_state.state = SessionState()
-    st.session_state.state.data_source = "csv"
-    st.session_state.state.data = None
-    st.session_state.mode = "Simple"
-    st.session_state.model_params = {"forecast_horizon": 12}
+# Initialize session state with defaults
+def initialize_session_state():
+    if 'state' not in st.session_state:
+        logger.info("Initializing SessionState")
+        st.session_state.state = SessionState()
+        st.session_state.state.data_source = "csv"
+        st.session_state.state.data = None
+        st.session_state.state.processed_data = None
+        st.session_state.mode = "Simple"
+        st.session_state.model_params = {"forecast_horizon": 12}
 
 # Cache data loading with hashable inputs
 @st.cache_data(show_spinner=False)
-def cached_load_data(_data_source: str) -> Optional[pd.DataFrame]:
+def cached_load_data(_data_source: str, _file=None, _connection_string: str = "", _api_config: dict = {}) -> Optional[pd.DataFrame]:
     """Load and validate data with caching"""
     try:
         data = load_data()
         if data is None:
             return None
-        required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand'], 
-                        STANDARD_COLUMNS['delivery_date'], STANDARD_COLUMNS['delivery_quantity']]
+        required_cols = [
+            STANDARD_COLUMNS['date'],
+            STANDARD_COLUMNS['demand'],
+            STANDARD_COLUMNS['delivery_date'],
+            STANDARD_COLUMNS['delivery_quantity']
+        ]
         is_valid, message = DataProcessor.validate_columns(data, required_cols)
         if not is_valid:
-            st.error(message)
+            st.error(message, icon="🚨")
+            st.markdown(
+                """
+                <div class='error-box'>
+                <strong>Need help?</strong> Ensure your file includes columns: date, demand, delivery_date, delivery_quantity. 
+                Supported aliases include 'quantity' for 'demand'. 
+                <a href='#' onclick='st.session_state.show_template = True'>Download a sample template</a>.
+                </div>
+                """, unsafe_allow_html=True
+            )
+            if 'show_template' in st.session_state and st.session_state.show_template:
+                template_data = pd.DataFrame({
+                    'date': ['2023-01-01', '2023-02-01'],
+                    'demand': [100, 120],
+                    'delivery_date': ['2023-01-05', '2023-02-06'],
+                    'delivery_quantity': [95, 115]
+                })
+                st.download_button(
+                    label="Download Sample CSV",
+                    data=template_data.to_csv(index=False),
+                    file_name="sample_demand_data.csv",
+                    mime="text/csv"
+                )
             return None
         return data
     except Exception as e:
         logger.error(f"Data loading error: {str(e)}")
+        st.error(f"Failed to load data: {str(e)}. Please check file format or connection details.", icon="🚨")
         return None
 
 # Cache feature engineering
@@ -82,68 +141,89 @@ def cached_feature_engineering(_data: pd.DataFrame) -> Optional[pd.DataFrame]:
 def validate_time_series(ts: Optional[pd.Series]) -> bool:
     """Check if time series is valid"""
     if ts is None or ts.empty:
-        st.error("Time series data is invalid. Ensure the data contains valid date and demand columns.")
+        st.error("Time series data is invalid. Ensure the data contains valid date and demand columns.", icon="🚨")
         return False
     return True
 
-# Main App
-def main():
+# Render dashboard header
+def render_dashboard_header():
     st.title("Product Demand Analysis Toolkit")
-    st.markdown("Upload a CSV/Excel file to analyze demand, view forecasts, and optimize inventory.")
+    st.markdown(
+        """
+        Analyze demand trends, generate forecasts, and optimize inventory. 
+        Upload a CSV/Excel file to get started.
+        """
+    )
+    st.markdown(
+        '<div class="tooltip">ℹ️<span class="tooltiptext">Switch between Simple Mode for quick insights or Technical Mode for advanced analysis.</span></div>',
+        unsafe_allow_html=True
+    )
 
-    # Sidebar
+# Render sidebar controls
+def render_sidebar():
     with st.sidebar:
         st.header("Control Panel")
-        st.markdown('<div class="tooltip">ℹ️<span class="tooltiptext">Use Simple Mode for quick insights or Technical Mode for advanced analysis.</span></div>', 
-                    unsafe_allow_html=True)
-        mode = st.radio("Mode", ["Simple", "Technical"], index=0 if st.session_state.mode == "Simple" else 1)
+        mode = st.radio(
+            "Select Mode",
+            ["Simple", "Technical"],
+            index=0 if st.session_state.mode == "Simple" else 1,
+            help="Simple Mode for quick insights, Technical Mode for detailed analysis."
+        )
         st.session_state.mode = mode
 
         show_data_source_selection()
 
         if st.button("Load Data", type="primary", help="Upload and process your demand data"):
-            with st.spinner("Loading data..."):
-                data = cached_load_data(st.session_state.state.data_source)
+            with st.spinner("Loading and processing data..."):
+                data = cached_load_data(
+                    st.session_state.state.data_source,
+                    getattr(st.session_state.state, "uploaded_file", None),
+                    getattr(st.session_state.state, "connection_string", ""),
+                    getattr(st.session_state.state, "api_config", {})
+                )
                 if data is not None:
                     processed_data = DataProcessor.preprocess_data(data)
                     if processed_data is not None:
                         st.session_state.state.data = cached_feature_engineering(processed_data)
-                        st.success("Data loaded and processed successfully!")
+                        st.success("Data loaded and processed successfully!", icon="✅")
                     else:
-                        st.error("Data preprocessing failed. Check column requirements and file format.")
+                        st.error("Data preprocessing failed. Check column requirements and file format.", icon="🚨")
                 else:
-                    st.error("Failed to load data. Ensure the file is CSV/Excel with columns: date, demand, delivery_date, delivery_quantity.")
+                    st.error("Failed to load data. Ensure the file is CSV/Excel with required columns.", icon="🚨")
 
-    # Render UI based on mode
-    if st.session_state.state.data is None:
-        st.info("Please upload data to begin analysis.")
-        return
-
-    if st.session_state.mode == "Simple":
-        show_simple_mode()
-    else:
-        show_technical_mode()
-
-# Simple Mode
+# Render Simple Mode dashboard
 def show_simple_mode():
     st.header("Demand Planning Dashboard")
-    st.markdown("Explore key insights and forecasts for inventory optimization.")
+    st.markdown("Explore key insights and forecasts to optimize inventory.")
 
-    col1, col2 = st.columns([2, 1])
+    # Two-column layout for overview and metrics
+    col1, col2 = st.columns([3, 1])
     with col1:
-        with st.expander("Forecast Overview", expanded=True):
+        with st.expander("Demand Forecast", expanded=True):
             show_forecasting()
-            st.markdown("**Recommended Inventory**: Increase stock in high-demand regions based on forecast trends.")
+            st.markdown(
+                '<div class="tooltip">ℹ️<span class="tooltiptext">Use these forecasts to adjust inventory levels in high-demand periods.</span></div>',
+                unsafe_allow_html=True
+            )
+            st.markdown("**Recommendation**: Increase stock in high-demand regions based on trends.")
 
     with col2:
         with st.expander("Key Metrics", expanded=True):
-            st.metric("Average Demand", 
-                     f"{st.session_state.state.data[STANDARD_COLUMNS['demand']].mean():.2f}",
-                     help="Average demand across all periods.")
-            st.metric("Recent Anomalies", 
-                     len(detect_sales_anomalies(DataProcessor.prepare_time_series(st.session_state.state.data))),
-                     help="Number of unusual demand spikes/drops.")
+            data = st.session_state.state.data
+            st.metric(
+                "Average Demand",
+                f"{data[STANDARD_COLUMNS['demand']].mean():.2f}",
+                help="Average demand across all periods."
+            )
+            ts = DataProcessor.prepare_time_series(data)
+            anomalies_count = len(detect_sales_anomalies(ts)) if validate_time_series(ts) else 0
+            st.metric(
+                "Recent Anomalies",
+                anomalies_count,
+                help="Number of unusual demand spikes or drops."
+            )
 
+    # Visualizations section
     with st.expander("Visualizations", expanded=True):
         st.subheader("Regional Performance")
         region_performance = analyze_regional_performance(st.session_state.state.data)
@@ -157,6 +237,7 @@ def show_simple_mode():
             anomalies = detect_sales_anomalies(ts)
             st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
 
+    # Download button
     st.download_button(
         label="Download Insights",
         data=st.session_state.state.data.to_csv(index=False),
@@ -165,26 +246,39 @@ def show_simple_mode():
         help="Download a summary of demand data and insights."
     )
 
-# Technical Mode
+# Render Technical Mode dashboard
 def show_technical_mode():
     st.header("Technical Analysis Dashboard")
-    st.markdown("Analyze data, tune models, and explore detailed metrics.")
+    st.markdown("Dive into detailed data analysis, model tuning, and diagnostics.")
 
-    tabs = st.tabs(["Data Exploration", "Model Tuning", "Forecasting", "Regional Analysis", 
-                    "Anomaly Detection", "Discontinued Products", "Model Management"])
+    # Tabbed interface for technical features
+    tabs = st.tabs([
+        "Data Exploration",
+        "Model Tuning",
+        "Forecasting",
+        "Regional Analysis",
+        "Anomaly Detection",
+        "Discontinued Products",
+        "Model Management"
+    ])
 
     with tabs[0]:
         show_data_exploration()
 
     with tabs[1]:
         st.subheader("Model Parameters")
-        forecast_horizon = st.slider("Forecast Horizon (months)", 1, 24, 
-                                   st.session_state.model_params["forecast_horizon"])
+        forecast_horizon = st.slider(
+            "Forecast Horizon (months)",
+            1,
+            24,
+            st.session_state.model_params["forecast_horizon"],
+            help="Set the number of months to forecast."
+        )
         st.session_state.model_params["forecast_horizon"] = forecast_horizon
         show_model_training()
 
     with tabs[2]:
-        st.subheader("Forecasts")
+        st.subheader("Demand Forecasts")
         show_forecasting()
         st.subheader("Extended Forecast (18 Months)")
         show_extended_forecasting()
@@ -204,27 +298,63 @@ def show_technical_mode():
             if not anomalies.empty and 'is_anomaly' in anomalies.columns:
                 st.subheader("Detected Anomalies")
                 anomaly_table = anomalies[anomalies['is_anomaly']].reset_index()
-                anomaly_table.columns = ['Date', 'Value', 'Rolling Mean', 'Upper Bound', 
-                                       'Lower Bound', 'Is Anomaly']
+                anomaly_table.columns = ['Date', 'Value', 'Rolling Mean', 'Upper Bound',
+                                        'Lower Bound', 'Is Anomaly']
                 st.dataframe(anomaly_table)
             else:
                 st.warning("No anomalies detected or anomaly data is incomplete.")
 
-    # In show_technical_mode, under "Discontinued Products" tab
     with tabs[5]:
-        threshold = st.slider("Months without orders", 2, 12, 3)
+        st.subheader("Discontinued Products")
+        threshold = st.slider(
+            "Months without orders",
+            2,
+            12,
+            3,
+            help="Set the threshold for identifying discontinued products."
+        )
         discontinued = detect_discontinued_products(st.session_state.state.data, threshold)
         if STANDARD_COLUMNS['material'] in st.session_state.state.data.columns:
             st.dataframe(discontinued)
-            fig = px.bar(discontinued.head(20), x='Material', y='Months_Since_Last_Order',
-                        title="Top 20 Discontinued Products",
-                        color='Potentially_Discontinued')
+            fig = px.bar(
+                discontinued.head(20),
+                x='material',
+                y='Months_Since_Last_Order',
+                title="Top 20 Discontinued Products",
+                color='Potentially_Discontinued'
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("Material column not found in the data. Please ensure the dataset includes a 'Material' or equivalent column.")
+            st.warning(
+                "Material column not found. Ensure the dataset includes a 'Material' or equivalent column.",
+                icon="⚠️"
+            )
 
     with tabs[6]:
         show_model_management()
+
+# Main App
+def main():
+    initialize_session_state()
+    render_dashboard_header()
+    render_sidebar()
+
+    # Check if data is loaded
+    if st.session_state.state.data is None:
+        st.info(
+            """
+            Please upload a CSV/Excel file or connect to a data source to begin analysis. 
+            Required columns: date, demand, delivery_date, delivery_quantity.
+            """,
+            icon="ℹ️"
+        )
+        return
+
+    # Render mode-specific UI
+    if st.session_state.mode == "Simple":
+        show_simple_mode()
+    else:
+        show_technical_mode()
 
 if __name__ == "__main__":
     main()
