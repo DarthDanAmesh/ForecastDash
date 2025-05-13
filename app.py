@@ -1,42 +1,40 @@
 import streamlit as st
-import plotly.express as px
-import pandas as pd
 import logging
 from typing import Optional
 from cls_session_management import SessionState
-from cls_data_preprocessor import DataProcessor
 from ui_data_source import show_data_source_selection
-from ui_model_management import show_model_management
+from simple_mode_ui import show_simple_mode
+from funct_eda import show_data_exploration
+from funct_model_training import show_model_training
+from funct_shw_forecast_plot import show_forecasting
 from ui_extended_forecast import show_extended_forecasting
 from regional_perf_analysis import analyze_regional_performance, plot_regional_performance
 from funct_abnormal_detect import detect_sales_anomalies, plot_anomalies
-from funct_feature_eng import enhance_feature_engineering
-from funct_load_data import load_data
-from funct_eda import show_data_exploration
-from funct_model_training import show_model_training
-from funct_shw_forecast_plot import display_forecast, show_forecasting, update_forecast_state, cached_generate_forecast
 from funct_detect_prod_discontinued import detect_discontinued_products
+from ui_model_management import show_model_management
+from funct_load_data import load_data
+from funct_feature_eng import enhance_feature_engineering
+from cls_data_preprocessor import DataProcessor
 from column_config import STANDARD_COLUMNS
-from cls_forecast_engine import ForecastEngine
-from consts_model import DEFAULT_FORECAST_PERIOD
+import pandas as pd
+import plotly.express as px
 
 # Configuration
-st.set_page_config(page_title="Product Demand Toolkit", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Franke Demand Toolkit", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for modern, consistent styling
+# Custom CSS for consistent styling
 st.markdown("""
     <style>
     .main { padding: 2rem; background-color: #f9fafb; }
     .stButton > button { 
-        width: 100%; 
         padding: 10px; 
         font-size: 16px; 
         border-radius: 8px; 
-        background-color: #2563eb; 
+        background-color: #005670; 
         color: white; 
         border: none; 
     }
-    .stButton > button:hover { background-color: #1e40af; }
+    .stButton > button:hover { background-color: #003d4f; }
     .st-expander { 
         border: 1px solid #e5e7eb; 
         border-radius: 8px; 
@@ -67,6 +65,16 @@ st.markdown("""
         border-radius: 8px; 
         border: 1px solid #ef4444; 
     }
+    .nav-bar { 
+        background-color: #005670; 
+        padding: 1rem; 
+        color: white; 
+        display: flex; 
+        justify-content: space-between; 
+        align-items: center; 
+    }
+    .nav-bar h1 { margin: 0; font-size: 24px; }
+    .sidebar-filter { background-color: #f1f5f9; padding: 1rem; border-radius: 8px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -74,22 +82,15 @@ st.markdown("""
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize session state with defaults
+# Initialize session state
 def initialize_session_state():
     if 'state' not in st.session_state or not isinstance(st.session_state.state, SessionState):
-        logger.info("Initializing or reinitializing SessionState")
-        st.session_state.state = SessionState.get_or_create()
-    
-    # Set default values if not already set
-    if not hasattr(st.session_state.state, 'data_source'):
+        logger.info("Initializing SessionState")
+        st.session_state.state = SessionState()
         st.session_state.state.data_source = "csv"
-    if not hasattr(st.session_state.state, 'data'):
         st.session_state.state.data = None
-    if not hasattr(st.session_state.state, 'processed_data'):
         st.session_state.state.processed_data = None
-    if not hasattr(st.session_state.state, 'models'):
         st.session_state.state.models = {}
-    if not hasattr(st.session_state.state, 'forecasts'):
         st.session_state.state.forecasts = {}
 
     if 'mode' not in st.session_state:
@@ -101,11 +102,10 @@ def initialize_session_state():
     if 'current_forecast' not in st.session_state:
         st.session_state.current_forecast = None
 
-# Cache data loading with hashable inputs
+# Cache data loading
 @st.cache_data(show_spinner=False)
 def cached_load_data(_data_source: str, _file=None, _connection_string: str = "", 
                     _api_config: dict = {}) -> Optional[pd.DataFrame]:
-    """Load and validate data with caching"""
     try:
         data = load_data()
         if data is None:
@@ -124,8 +124,8 @@ def cached_load_data(_data_source: str, _file=None, _connection_string: str = ""
                 """
                 <div class='error-box'>
                 <strong>Need help?</strong> Ensure your file includes columns: date, demand. 
-                Supported aliases include 'quantity' for 'demand', 'act. gds issue date' for 'delivery_date'. 
-                <a href='#' onclick='st.session_state.show_template = True'>Download a sample template</a>.
+                Supported aliases: 'quantity' for demand, 'itemcode' for material.
+                <a href='#' onclick='st.session_state.show_template = True'>Download sample template</a>.
                 </div>
                 """, unsafe_allow_html=True
             )
@@ -133,7 +133,7 @@ def cached_load_data(_data_source: str, _file=None, _connection_string: str = ""
                 template_data = pd.DataFrame({
                     'date': ['2023-01-01', '2023-02-01'],
                     'demand': [100, 120],
-                    'material': ['MAT001', 'MAT002'],
+                    'material': ['ANA-1011', 'BAK-101'],
                     'country': ['US', 'US']
                 })
                 st.download_button(
@@ -148,40 +148,27 @@ def cached_load_data(_data_source: str, _file=None, _connection_string: str = ""
         return data
     except Exception as e:
         logger.error(f"Data loading error: {str(e)}")
-        st.error(f"Failed to load data: {str(e)}. Please check file format or connection details.", icon="🚨")
+        st.error(f"Failed to load data: {str(e)}. Please check file format.", icon="🚨")
         return None
 
 # Cache feature engineering
 @st.cache_data(show_spinner=False)
 def cached_feature_engineering(_data: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Cached feature engineering"""
     if _data is None:
         return None
     return enhance_feature_engineering(_data)
 
-# Validate time series
-def validate_time_series(ts: Optional[pd.Series]) -> bool:
-    """Check if time series is valid"""
-    if ts is None or ts.empty:
-        st.error(
-            "Time series data is invalid. Ensure the data contains valid date and demand columns.", 
-            icon="🚨"
-        )
-        return False
-    return True
-
-# Render dashboard header
-def render_dashboard_header():
-    st.title("Product Demand Analysis Toolkit")
+# Render navigation bar
+def render_nav_bar():
     st.markdown(
         """
-        Analyze demand trends, generate forecasts, and optimize inventory. 
-        Upload a CSV/Excel file to get started.
-        """
-    )
-    st.markdown(
-        '<div class="tooltip">ℹ️<span class="tooltiptext">Switch between Simple Mode for quick insights or Technical Mode for advanced analysis.</span></div>',
-        unsafe_allow_html=True
+        <div class='nav-bar'>
+            <h1>Franke Demand Toolkit</h1>
+            <div>
+                <span class='tooltip'>ℹ️<span class='tooltiptext'>Contact support: support@franke.com</span></span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True
     )
 
 # Render sidebar controls
@@ -189,17 +176,17 @@ def render_sidebar():
     with st.sidebar:
         st.header("Control Panel")
         mode = st.radio(
-            "Select Mode",
+            "Mode",
             ["Simple", "Technical"],
             index=0 if st.session_state.mode == "Simple" else 1,
-            help="Simple Mode for quick insights, Technical Mode for detailed analysis."
+            help="Simple for quick insights, Technical for advanced analysis.",
+            key="mode_select"
         )
         st.session_state.mode = mode
-
         show_data_source_selection()
 
-        if st.button("Load Data", type="primary", help="Upload and process your demand data"):
-            with st.spinner("Loading and processing data..."):
+        if st.button("Load Data", type="primary", help="Upload your demand data"):
+            with st.spinner("Loading data..."):
                 data = cached_load_data(
                     st.session_state.state.data_source,
                     getattr(st.session_state.state, "uploaded_file", None),
@@ -210,217 +197,77 @@ def render_sidebar():
                     processed_data = DataProcessor.preprocess_data(data)
                     if processed_data is not None:
                         st.session_state.state.data = cached_feature_engineering(processed_data)
-                        st.success("Data loaded and processed successfully!", icon="✅")
+                        st.success("Data loaded successfully!", icon="✅")
                     else:
-                        st.error(
-                            "Data preprocessing failed. Check column requirements and file format.", 
-                            icon="🚨"
-                        )
+                        st.error("Data preprocessing failed. Check column requirements.", icon="🚨")
                 else:
-                    st.error(
-                        "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
-                        icon="🚨"
-                    )
+                    st.error("Failed to load data. Ensure CSV/Excel format.", icon="🚨")
 
-# Render Simple Mode dashboard
-def show_simple_mode():
-    st.header("Demand Planning Dashboard")
-    st.markdown("Explore key insights and forecasts to optimize inventory.")
-
-    # Validate session state
-    if not isinstance(st.session_state.state, SessionState):
-        st.error("Session state is not properly initialized. Reinitializing...", icon="🚨")
-        st.session_state.state = SessionState.get_or_create()
-        st.rerun()  # Force rerun to apply reinitialization
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        with st.expander("Demand Forecast", expanded=True):
-            if st.session_state.forecast_generated and st.session_state.current_forecast is not None:
-                show_forecasting()
-            else:
-                st.info(
-                    "No forecast available. Click below to generate a demand forecast using the default ARIMA model.",
-                    icon="ℹ️"
-                )
-                if st.button("Generate Default Forecast", type="primary", help="Generate a demand forecast"):
-                    with st.spinner("Generating default forecast..."):
-                        logger.info(f"Session state type: {type(st.session_state.state)}")
-                        logger.info(f"Models before assignment: {st.session_state.state.models}")
-                        ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-                        if validate_time_series(ts):
-                            try:
-                                logger.info("Training ARIMA model")
-                                model_info = ForecastEngine.train_arima(ts)
-                                st.session_state.state.models["ARIMA"] = model_info
-                                st.session_state.forecast_generated = False
-                                logger.info("Calling show_forecasting")
-                                model_type = "ARIMA"
-                                forecast = cached_generate_forecast(ts, model_type, DEFAULT_FORECAST_PERIOD, model_info)
-                                if forecast is not None:
-                                    update_forecast_state(model_type, DEFAULT_FORECAST_PERIOD, forecast)
-                                    display_forecast(ts, forecast)
-                                st.toast("Default forecast generated successfully!", icon="✅")
-                            except Exception as e:
-                                logger.error(f"Forecast error: {str(e)}")
-                                st.error(
-                                    f"Failed to generate default forecast: {str(e)}. Please check data.", 
-                                    icon="🚨"
-                                )
-                        else:
-                            logger.error("Invalid time series")
-                            st.error("Invalid time series data. Please check your input.", icon="🚨")
-            st.markdown(
-                '<div class="tooltip">ℹ️<span class="tooltiptext">Use these forecasts to adjust inventory levels in high-demand periods.</span></div>',
-                unsafe_allow_html=True
-            )
-            st.markdown("**Recommendation**: Increase stock in high-demand regions based on trends.")
-
-    with col2:
-        with st.expander("Key Metrics", expanded=True):
-            data = st.session_state.state.data
-            if data is not None and STANDARD_COLUMNS['demand'] in data.columns:
-                st.metric(
-                    "Average Demand",
-                    f"{data[STANDARD_COLUMNS['demand']].mean():.2f}",
-                    help="Average demand across all periods."
-                )
-                ts = DataProcessor.prepare_time_series(data)
-                anomalies_count = len(detect_sales_anomalies(ts)) if validate_time_series(ts) else 0
-                st.metric(
-                    "Recent Anomalies",
-                    anomalies_count,
-                    help="Number of unusual demand spikes or drops."
-                )
-            else:
-                st.warning("No data available for metrics.", icon="⚠️")
-
-    with st.expander("Visualizations", expanded=True):
-        st.subheader("Regional Performance")
-        region_performance = analyze_regional_performance(st.session_state.state.data)
-        fig1, fig2 = plot_regional_performance(region_performance)
-        st.plotly_chart(fig1, use_container_width=True)
-        st.plotly_chart(fig2, use_container_width=True)
-
-        st.subheader("Sales Anomalies")
-        ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-        if validate_time_series(ts):
-            anomalies = detect_sales_anomalies(ts)
-            st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
-
-    if st.session_state.state.data is not None:
-        st.download_button(
-            label="Download Insights",
-            data=st.session_state.state.data.to_csv(index=False),
-            file_name="demand_insights.csv",
-            mime="text/csv",
-            help="Download a summary of demand data and insights."
-        )
-
-# Render Technical Mode dashboard
+# Technical Mode dashboard
 def show_technical_mode():
     st.header("Technical Analysis Dashboard")
-    st.markdown("Dive into detailed data analysis, model tuning, and diagnostics.")
-
-    # Validate session state
-    if not isinstance(st.session_state.state, SessionState):
-        st.error("Session state is not properly initialized. Reinitializing...", icon="🚨")
-        st.session_state.state = SessionState.get_or_create()
-        st.rerun()
-
     tabs = st.tabs([
-        "Data Exploration",
-        "Model Tuning",
-        "Forecasting",
-        "Regional Analysis",
-        "Anomaly Detection",
-        "Discontinued Products",
-        "Model Management"
+        "Data Exploration", "Model Tuning", "Forecasting",
+        "Regional Analysis", "Anomaly Detection", "Discontinued Products", "Model Management"
     ])
-
     with tabs[0]:
         show_data_exploration()
-
     with tabs[1]:
         st.subheader("Model Parameters")
         forecast_horizon = st.slider(
-            "Forecast Horizon (months)",
-            1,
-            24,
-            st.session_state.model_params["forecast_horizon"],
-            help="Set the number of months to forecast."
+            "Forecast Horizon (months)", 1, 24, st.session_state.model_params["forecast_horizon"],
+            help="Set forecast duration."
         )
         st.session_state.model_params["forecast_horizon"] = forecast_horizon
         show_model_training()
-
     with tabs[2]:
         st.subheader("Demand Forecasts")
         show_forecasting()
         st.subheader("Extended Forecast (18 Months)")
         show_extended_forecasting()
-
     with tabs[3]:
         region_performance = analyze_regional_performance(st.session_state.state.data)
         fig1, fig2 = plot_regional_performance(region_performance)
         st.plotly_chart(fig1, use_container_width=True)
         st.plotly_chart(fig2, use_container_width=True)
         st.dataframe(region_performance)
-
     with tabs[4]:
         ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-        if validate_time_series(ts):
+        if ts is not None and not ts.empty:
             anomalies = detect_sales_anomalies(ts)
             st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
             if not anomalies.empty and 'is_anomaly' in anomalies.columns:
                 st.subheader("Detected Anomalies")
                 anomaly_table = anomalies[anomalies['is_anomaly']].reset_index()
-                anomaly_table.columns = ['Date', 'Value', 'Rolling Mean', 'Upper Bound',
-                                        'Lower Bound', 'Is Anomaly']
+                anomaly_table.columns = ['Date', 'Value', 'Rolling Mean', 'Upper Bound', 'Lower Bound', 'Is Anomaly']
                 st.dataframe(anomaly_table)
             else:
-                st.warning("No anomalies detected or anomaly data is incomplete.", icon="⚠️")
-
+                st.warning("No anomalies detected.", icon="⚠️")
     with tabs[5]:
         st.subheader("Discontinued Products")
-        threshold = st.slider(
-            "Months without orders",
-            2,
-            12,
-            3,
-            help="Set the threshold for identifying discontinued products."
-        )
+        threshold = st.slider("Months without orders", 2, 12, 3, help="Threshold for discontinuation.")
         discontinued = detect_discontinued_products(st.session_state.state.data, threshold)
         if STANDARD_COLUMNS['material'] in st.session_state.state.data.columns:
             st.dataframe(discontinued)
             fig = px.bar(
-                discontinued.head(20),
-                x='material',
-                y='Months_Since_Last_Order',
-                title="Top 20 Discontinued Products",
-                color='Potentially_Discontinued'
+                discontinued.head(20), x='material', y='Months_Since_Last_Order',
+                title="Top 20 Discontinued Products", color='Potentially_Discontinued'
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning(
-                "Material column not found. Ensure the dataset includes a 'Material' or equivalent column.",
-                icon="⚠️"
-            )
-
+            st.warning("Material column missing.", icon="⚠️")
     with tabs[6]:
         show_model_management()
 
 # Main App
 def main():
     initialize_session_state()
-    render_dashboard_header()
+    render_nav_bar()
     render_sidebar()
 
     if st.session_state.state.data is None:
         st.info(
-            """
-            Please upload a CSV/Excel file or connect to a data source to begin analysis. 
-            Required columns: date, demand. Optional: material, country.
-            """,
+            "Upload a CSV/Excel file to start. Required columns: date, demand. Optional: material, country.",
             icon="ℹ️"
         )
         return
