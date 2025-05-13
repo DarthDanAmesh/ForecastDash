@@ -1,2 +1,12 @@
 pygwalker
 ipywidgets
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+altair
+scikit-learn
+xgboost
+statsmodels
