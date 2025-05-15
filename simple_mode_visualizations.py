@@ -59,37 +59,81 @@ def plot_historical_forecast_comparison(ts: pd.Series, forecast: pd.Series):
     )
 
 def display_kpis():
-    """Display KPIs: Safety Stock, MTD Sales, % Achievement."""
+    """Display key performance indicators for demand planners."""
     st.subheader("Key Performance Indicators")
+
     data = st.session_state.state.data
     ts = DataProcessor.prepare_time_series(data)
+
     if ts is None or ts.empty:
+        st.warning("No valid time series data available for KPIs.")
         return
-    
-    current_month = ts.index.max()
-    mtd_sales = ts[ts.index.month == current_month.month].sum()
-    avg_demand = ts.mean()
-    safety_stock = avg_demand * 0.2  # Example: 20% of average demand
+
+    # Ensure index is datetime
+    ts = ts.dropna()
+    ts.index = pd.to_datetime(ts.index)
+    current_date = ts.index.max()
+
+    # Define current and previous month/year
+    current_month = current_date.to_period('M')
+    prev_month = (current_date - pd.DateOffset(months=1)).to_period('M')
+
+    # Filter full months only for MoM comparison
+    def filter_month(df, period):
+        return df[df.index.to_period('M') == period]
+
+    current_month_data = filter_month(ts, current_month)
+    prev_month_data = filter_month(ts, prev_month)
+
+    mtd_sales = current_month_data.sum()
+    prev_month_sales = prev_month_data.sum() if not prev_month_data.empty else 0
+
+    # Average Demand (3-month rolling average for smoother metric)
+    avg_demand = ts[-90:].mean()  # Approximate last 3 months
+
+    # Safety Stock based on volatility
+    demand_volatility = (ts[-90:].std() / avg_demand * 100) if avg_demand > 0 else 0
+    safety_stock = avg_demand * (1 + (demand_volatility / 100) * 0.5)  # Adjust buffer based on volatility
+
+    # % Achievement
     achievement = (mtd_sales / avg_demand * 100) if avg_demand > 0 else 0
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(
-            "Safety Stock",
-            f"{safety_stock:.2f}",
-            help="Recommended stock buffer based on average demand."
-        )
-    with col2:
-        st.metric(
-            "MTD Sales",
-            f"{mtd_sales:.2f}",
-            help="Month-to-date sales for the current period."
-        )
-    with col3:
-        st.metric(
-            "% Achievement",
-            f"{achievement:.2f}%",
-            delta=f"{achievement - 100:.2f}%",
-            delta_color="inverse",
-            help="Sales performance relative to average demand."
-        )
+    achievement_delta = achievement - 100  # vs target
+
+    # Forecasted Demand (simple moving average)
+    forecasted_demand = ts.rolling(window=3, min_periods=1).mean().iloc[-1]
+
+    # MoM Change (only compare full months to avoid partial month bias)
+    mom_change = 0
+    if not prev_month_data.empty and prev_month_sales > 0:
+        mom_change = ((mtd_sales - prev_month_sales) / prev_month_sales * 100)
+
+    # Layout
+    kpi1, kpi2, kpi3 = st.columns(3)
+    with kpi1:
+        st.metric("Safety Stock", f"{safety_stock:.2f}",
+                  help="Calculated using average demand and volatility. Buffer increases with higher variability.")
+
+    with kpi2:
+        st.metric("MTD Sales", f"{mtd_sales:.2f}",
+                  help="Total sales from the current month-to-date.")
+
+    with kpi3:
+        st.metric("% Achievement", f"{achievement:.1f}%",
+                  delta=f"{achievement_delta:.1f}%",
+                  delta_color="normal" if achievement_delta >= 0 else "inverse",
+                  help="Current MTD sales as % of recent average demand.")
+
+    kpi4, kpi5, kpi6 = st.columns(3)
+    with kpi4:
+        st.metric("Forecasted Demand", f"{forecasted_demand:.2f}",
+                  help="Next expected period demand using 3-period moving average.")
+
+    with kpi5:
+        st.metric("Demand Volatility", f"{demand_volatility:.1f}%",
+                  help="Coefficient of variation (standard deviation / mean), indicates demand stability.")
+
+    with kpi6:
+        st.metric("MoM Sales Change", f"{mom_change:.1f}%",
+                  delta=f"{mom_change:.1f}%",
+                  delta_color="normal" if mom_change >= 0 else "inverse",
+                  help="Change in total monthly sales compared to last full month.")
