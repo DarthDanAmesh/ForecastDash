@@ -1,5 +1,7 @@
-def prepare_order_time_series(df, target_col='Delivery Quantity', 
-                             date_col='Customer Ref. Date', freq='ME'):
+from constants import STANDARD_COLUMNS
+
+def prepare_order_time_series(df, target_col=STANDARD_COLUMNS['delivery_quantity'], 
+                             date_col=STANDARD_COLUMNS['order_date'], freq='ME'):
     """
     Convert dataframe to order-based time series format instead of delivery-based
     
@@ -12,13 +14,11 @@ def prepare_order_time_series(df, target_col='Delivery Quantity',
     Returns:
         Time series of orders
     """
-    # Filter out rows with missing order dates
     if date_col not in df.columns:
         return None
         
     df_orders = df.dropna(subset=[date_col])
     
-    # Create time series based on order date instead of created/delivery date
     ts_orders = df_orders.set_index(date_col)[target_col]
     ts_orders = ts_orders.resample(freq).sum()
     

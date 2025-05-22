@@ -10,3 +10,4 @@ altair
 scikit-learn
 xgboost
 statsmodels
+tensorboard

@@ -1,6 +1,9 @@
+# cls_plots_visuals.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
 class Visualizer:
     @staticmethod
@@ -8,21 +11,20 @@ class Visualizer:
         fig = px.line(ts, title=title)
         fig.update_layout(xaxis_title='Date', yaxis_title='Value')
         return fig
-
+    
     @staticmethod
     def plot_forecast(history, forecast, title="Demand Forecast"):
         fig = px.line(history, title=title)
         fig.add_scatter(x=forecast.index, y=forecast.values, name='Forecast')
         fig.update_layout(xaxis_title='Date', yaxis_title='Demand')
         return fig
-
+    
     @staticmethod
     def plot_geographical(df, location_col='country', value_col='demand'):
         try:
             df[value_col] = pd.to_numeric(df[value_col], errors='coerce')
             country_counts = df.groupby(location_col)[value_col].sum().reset_index()
             country_counts[location_col] = country_counts[location_col].str.upper()
-
             country_code_map = {
                 'IT': 'Italy', 'DE': 'Germany', 'FR': 'France', 'ES': 'Spain',
                 'GB': 'United Kingdom', 'NL': 'Netherlands', 'BE': 'Belgium',
@@ -31,10 +33,8 @@ class Visualizer:
                 'IE': 'Ireland', 'PL': 'Poland', 'CZ': 'Czech Republic',
                 'HU': 'Hungary', 'RO': 'Romania', 'GR': 'Greece', 'TR': 'Turkey',
             }
-
             country_counts['country_name'] = country_counts[location_col].map(country_code_map)
             location_values = country_counts['country_name'].fillna(country_counts[location_col])
-
             fig = px.choropleth(
                 country_counts,
                 locations=location_values,
@@ -46,7 +46,6 @@ class Visualizer:
                 color_continuous_scale='Viridis',
                 title=f"Demand by Country"
             )
-
             fig.update_layout(
                 geo=dict(
                     showframe=False,
@@ -60,7 +59,7 @@ class Visualizer:
         except Exception as e:
             st.error(f"Error creating geographical plot: {str(e)}")
             return px.choropleth()
-
+    
     @staticmethod
     def plot_product_performance(df, group_col='material', value_col='demand', top_n=10):
         try:
@@ -68,7 +67,6 @@ class Visualizer:
             df = df.dropna(subset=[value_col, group_col])
             grouped = df.groupby(group_col)[value_col].sum()
             top_products = grouped.reset_index().sort_values(value_col, ascending=False).head(top_n)
-
             fig = px.bar(
                 top_products, 
                 x=group_col, 
@@ -79,3 +77,19 @@ class Visualizer:
         except Exception as e:
             st.error(f"Error creating product performance plot: {str(e)}")
             return px.bar()
+    
+    @staticmethod
+    def plot_comparison_charts(history, forecast):
+        """Create comparison charts for historical and forecasted data."""
+        fig = make_subplots(rows=2, cols=1, subplot_titles=("Historical vs Forecast", "Performance Gaps"))
+        
+        # Historical vs Forecast
+        fig.add_trace(go.Scatter(x=history.index, y=history.values, mode='lines', name='Historical'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines', name='Forecast'), row=1, col=1)
+        
+        # Performance Gaps
+        gaps = ((forecast - history) / history * 100).fillna(0)
+        fig.add_trace(go.Bar(x=gaps.index, y=gaps.values, name='Performance Gap'), row=2, col=1)
+        
+        fig.update_layout(title_text="Demand Forecast Comparison", showlegend=True)
+        return fig

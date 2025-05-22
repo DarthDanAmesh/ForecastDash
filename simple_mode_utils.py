@@ -1,5 +1,6 @@
+# simple_mode_utils.py
 import pandas as pd
-from column_config import STANDARD_COLUMNS
+from constants import STANDARD_COLUMNS
 import streamlit as st
 
 def filter_data(data: pd.DataFrame) -> pd.DataFrame:
@@ -12,6 +13,7 @@ def filter_data(data: pd.DataFrame) -> pd.DataFrame:
     
     if filters['materials']:
         filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(filters['materials'])]
+    
     if filters['countries']:
         filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(filters['countries'])]
     

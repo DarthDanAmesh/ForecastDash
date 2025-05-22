@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 from cls_data_preprocessor import DataProcessor
-from cls_forecast_engine import ForecastEngine
+from forecast_engine import ForecastEngine
 
 from funct_kpi_forecast_metrics import calculate_forecast_accuracy 
 from funct_prep_order_based_deliv_forecast import prepare_order_time_series

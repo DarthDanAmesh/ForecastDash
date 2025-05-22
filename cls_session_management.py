@@ -1,3 +1,4 @@
+# cls_session_management.py
 import streamlit as st
 import pandas as pd
 from typing import Optional, Dict, Any
@@ -6,39 +7,52 @@ import hashlib
 import json
 
 class SessionState:
-    """Manages application state for the demand planning toolkit, ensuring thread-safety and validation."""
+    """Manages application state for the demand planning toolkit, ensuring thread-safety."""
 
     _VALID_DATA_SOURCES = {'csv', 'database', 'api'}
-    _lock = Lock()  # Thread-safe lock for state modifications
+    _lock = Lock()
 
     def __init__(self) -> None:
         """Initialize session state with default values."""
         self._data: Optional[pd.DataFrame] = None
+        self._processed_data: Optional[pd.DataFrame] = None
         self._models: Dict[str, Any] = {}
         self._forecasts: Dict[str, pd.DataFrame] = {}
         self._data_source: Optional[str] = None
         self._connection_string: Optional[str] = None
-        self._uploaded_file: Optional[Any] = None
-        self._model_cache: Dict[str, Any] = {}
         self._api_config: Optional[Dict[str, Any]] = None
         self._data_fingerprints: Dict[str, str] = {}
         self._accuracy_data: Dict[str, Dict[str, float]] = {}
 
     @property
     def data(self) -> Optional[pd.DataFrame]:
-        """Get the preprocessed DataFrame."""
+        """Get the feature-engineered DataFrame."""
         return self._data
 
     @data.setter
     def data(self, value: Optional[pd.DataFrame]) -> None:
-        """Set the preprocessed DataFrame with validation."""
+        """Set the feature-engineered DataFrame with validation."""
         with self._lock:
             if value is not None and not isinstance(value, pd.DataFrame):
-                st.error("Invalid data: Must be a Pandas DataFrame.")
+                st.error("Invalid data: Must be a Pandas DataFrame.", icon="🚨")
                 return
             self._data = value
             if value is not None:
                 self._update_data_fingerprint()
+
+    @property
+    def processed_data(self) -> Optional[pd.DataFrame]:
+        """Get the raw processed DataFrame."""
+        return self._processed_data
+
+    @processed_data.setter
+    def processed_data(self, value: Optional[pd.DataFrame]) -> None:
+        """Set the raw processed DataFrame with validation."""
+        with self._lock:
+            if value is not None and not isinstance(value, pd.DataFrame):
+                st.error("Invalid processed data: Must be a Pandas DataFrame.", icon="🚨")
+                return
+            self._processed_data = value
 
     @property
     def data_source(self) -> Optional[str]:
@@ -50,7 +64,7 @@ class SessionState:
         """Set the data source with validation."""
         with self._lock:
             if value is not None and value not in self._VALID_DATA_SOURCES:
-                st.error(f"Invalid data source: Must be one of {', '.join(self._VALID_DATA_SOURCES)}.")
+                st.error(f"Invalid data source: Must be one of {', '.join(self._VALID_DATA_SOURCES)}.", icon="🚨")
                 return
             self._data_source = value
 
@@ -64,20 +78,9 @@ class SessionState:
         """Set the database connection string with validation."""
         with self._lock:
             if value is not None and not isinstance(value, str):
-                st.error("Invalid connection string: Must be a string.")
+                st.error("Invalid connection string: Must be a string.", icon="🚨")
                 return
             self._connection_string = value
-
-    @property
-    def uploaded_file(self) -> Optional[Any]:
-        """Get the uploaded file object."""
-        return self._uploaded_file
-
-    @uploaded_file.setter
-    def uploaded_file(self, value: Optional[Any]) -> None:
-        """Set the uploaded file object."""
-        with self._lock:
-            self._uploaded_file = value
 
     @property
     def api_config(self) -> Optional[Dict[str, Any]]:
@@ -90,10 +93,9 @@ class SessionState:
         with self._lock:
             if value is not None:
                 if not isinstance(value, dict) or 'url' not in value:
-                    st.error("Invalid API configuration: Must be a dictionary with a 'url' key.")
+                    st.error("Invalid API configuration: Must be a dictionary with a 'url' key.", icon="🚨")
                     return
             self._api_config = value
-
 
     @property
     def models(self) -> Dict[str, Any]:
@@ -115,22 +117,9 @@ class SessionState:
         """Set the dictionary of forecast results."""
         with self._lock:
             if value is not None and not isinstance(value, dict):
-                st.error("Forecasts must be a dictionary.")
+                st.error("Forecasts must be a dictionary.", icon="🚨")
                 return
             self._forecasts = value
-
-    @property
-    def model_cache(self) -> Dict[str, Any]:
-        """Get the model cache."""
-        return self._model_cache
-
-    @model_cache.setter
-    def model_cache(self, value: Dict[str, Any]) -> None:
-        with self._lock:
-            if value is not None and not isinstance(value, dict):
-                st.error("Model cache must be a dictionary.")
-                return
-            self._model_cache = value
 
     @property
     def data_fingerprints(self) -> Dict[str, str]:
@@ -143,67 +132,49 @@ class SessionState:
         return self._accuracy_data
 
     def _update_data_fingerprint(self) -> None:
-        """
-        Update the data fingerprint based on the current DataFrame.
-
-        Uses MD5 hash of serialized DataFrame to track data changes.
-        """
+        """Update the data fingerprint based on the current DataFrame."""
         if self._data is not None:
             try:
-                # Serialize DataFrame to string for hashing
                 data_str = self._data.to_json()
                 fingerprint = hashlib.md5(data_str.encode()).hexdigest()
                 self._data_fingerprints['current'] = fingerprint
             except Exception as e:
-                st.warning(f"Error updating data fingerprint: {str(e)}.")
+                st.warning(f"Error updating data fingerprint: {str(e)}.", icon="⚠️")
 
     def reset(self, full_reset: bool = True) -> None:
-        """
-        Reset session state to default values.
-
-        Args:
-            full_reset (bool): If True, reset all attributes; if False, reset only data-related attributes.
-        """
+        """Reset session state to default values."""
         with self._lock:
             self._data = None
+            self._processed_data = None
             self._models = {}
             self._forecasts = {}
-            self._model_cache = {}
             self._data_fingerprints = {}
             self._accuracy_data = {}
             if full_reset:
                 self._data_source = None
                 self._connection_string = None
-                self._uploaded_file = None
                 self._api_config = None
-            st.success("Session state reset successfully.")
+            st.success("Session state reset successfully.", icon="✅")
 
     def initialize_session(self) -> None:
-        """
-        Ensure session state is properly initialized in Streamlit.
-
-        Checks if st.session_state.state exists and initializes it if needed.
-        """
+        """Ensure session state is properly initialized in Streamlit."""
         with self._lock:
             if 'state' not in st.session_state:
                 st.session_state.state = self
-                st.success("Session state initialized successfully.")
+                st.success("Session state initialized successfully.", icon="✅")
             elif not isinstance(st.session_state.state, SessionState):
-                st.error("Session state corrupted. Reinitializing...")
+                st.error("Session state corrupted. Reinitializing...", icon="🚨")
                 st.session_state.state = self
 
     def validate_state(self) -> tuple[bool, str]:
-        """
-        Validate the current session state.
-
-        Returns:
-            tuple[bool, str]: (is_valid, message) indicating if the state is valid and any error message.
-        """
+        """Validate the current session state."""
         with self._lock:
             if self._data_source is not None and self._data_source not in self._VALID_DATA_SOURCES:
                 return False, f"Invalid data source: {self._data_source}"
             if self._data is not None and not isinstance(self._data, pd.DataFrame):
                 return False, "Invalid data: Must be a Pandas DataFrame."
+            if self._processed_data is not None and not isinstance(self._processed_data, pd.DataFrame):
+                return False, "Invalid processed data: Must be a Pandas DataFrame."
             if self._api_config is not None and ('url' not in self._api_config):
                 return False, "Invalid API configuration: Missing 'url' key."
             if self._connection_string is not None and not isinstance(self._connection_string, str):
@@ -212,7 +183,7 @@ class SessionState:
 
     @classmethod
     def get_or_create(cls):
-        """Get the current session state or create a new one if it doesn't exist."""
+        """Get the current session state or create a new one."""
         if 'state' not in st.session_state or not isinstance(st.session_state.state, cls):
             st.session_state.state = cls()
         return st.session_state.state

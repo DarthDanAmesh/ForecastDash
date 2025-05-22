@@ -1,59 +1,25 @@
-import numpy as np
+# funct_detect_prod_discontinued.py
+import pandas as pd
+from constants import STANDARD_COLUMNS
 
-def detect_discontinued_products(df, threshold_months=3):
-    """
-    Detect potentially discontinued products based on ordering patterns
-    """
-    # Group by product and get the last order date
-    product_last_order = df.groupby('material')['date'].max().reset_index()
-    product_last_order.columns = ['material', 'Last_Order_Date']
+def detect_discontinued_products(df: pd.DataFrame, threshold_months: int = 3, forecast: pd.DataFrame = None) -> pd.DataFrame:
+    """Detect potentially discontinued SKUs based on order patterns and forecasts."""
+    if not all(col in df.columns for col in [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['material']]):
+        raise ValueError("DataFrame must include date and material columns")
     
-    # Get current date from the data
-    latest_date = df['date'].max()
-    
-    # Calculate days since last order
-    product_last_order['Days_Since_Last_Order'] = (latest_date - product_last_order['Last_Order_Date']).dt.days
-    
-    # Convert to months (approximate)
-    product_last_order['Months_Since_Last_Order'] = (product_last_order['Days_Since_Last_Order'] / 30).round(1)
-    
-    # Flag potentially discontinued products
-    product_last_order['Potentially_Discontinued'] = product_last_order['Months_Since_Last_Order'] > threshold_months
-    
-    # Add product description
-    product_info = df[['material', 'material description']].drop_duplicates()
-    discontinued_products = product_last_order.merge(product_info, on='material')
-    
-    return discontinued_products.sort_values('Months_Since_Last_Order', ascending=False)
-
-
-def detect_discontinued_products_Depr(df, threshold_months=3):
-    """
-    Detect potentially discontinued products based on ordering patterns
-    
-    Args:
-        df: DataFrame with order data
-        threshold_months: Number of months without orders to flag as potentially discontinued
-        
-    Returns:
-        DataFrame with discontinued product flags
-    """
-    # Group by product and get the last order date
-    product_last_order = df.groupby('material')['date'].max().reset_index()
-    product_last_order.columns = ['material', 'Last_Order_Date']
-    
-    # Get current date from the data
-    latest_date = df['date'].max()
+    # Last order date per SKU
+    product_last_order = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].max().reset_index()
+    product_last_order.columns = [STANDARD_COLUMNS['material'], 'Last_Order_Date']
     
     # Calculate months since last order
-    product_last_order['Months_Since_Last_Order'] = ((latest_date - product_last_order['Last_Order_Date']) 
-                                                   / np.timedelta64(1, 'M')).round(1)
-    
-    # Flag potentially discontinued products
+    latest_date = df[STANDARD_COLUMNS['date']].max()
+    product_last_order['Months_Since_Last_Order'] = ((latest_date - product_last_order['Last_Order_Date']).dt.days / 30).round(1)
     product_last_order['Potentially_Discontinued'] = product_last_order['Months_Since_Last_Order'] > threshold_months
     
-    # Add product description
-    product_info = df[['material', 'material Description']].drop_duplicates()
-    discontinued_products = product_last_order.merge(product_info, on='material')
+    # Forecast insights
+    if forecast is not None and isinstance(forecast, pd.DataFrame) and not forecast.empty:
+        forecast_summary = forecast.groupby(STANDARD_COLUMNS['material'])['forecast'].mean().reset_index()
+        forecast_summary.columns = [STANDARD_COLUMNS['material'], 'Average_Forecast_Demand']
+        product_last_order = product_last_order.merge(forecast_summary, on=STANDARD_COLUMNS['material'], how='left')
     
-    return discontinued_products.sort_values('Months_Since_Last_Order', ascending=False)
+    return product_last_order.sort_values('Months_Since_Last_Order', ascending=False)

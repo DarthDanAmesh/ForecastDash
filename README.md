@@ -13,7 +13,7 @@ pip install -r requirements.txt
 To use the toolkit, run the following command:
 
 ```bash
-python app.py
+streamlit run app.py
 ```
 
 ![alt text](./dashboard.png "Title")

@@ -3,13 +3,9 @@ import streamlit as st
 import pandas as pd
 from typing import Optional
 from cls_data_preprocessor import DataProcessor
-from cls_forecast_engine import ForecastEngine
-from simple_mode_visualizations import plot_historical_forecast_comparison, display_kpis
-from simple_mode_insights import display_top_skus, display_discontinued_products, display_recommendation_cards
-from simple_mode_utils import filter_data, calculate_performance_gaps
-from funct_shw_forecast_plot import cached_generate_forecast, update_forecast_state, display_forecast
-from consts_model import DEFAULT_FORECAST_PERIOD
-from column_config import STANDARD_COLUMNS
+from forecast_engine import ForecastEngine
+from funct_shw_forecast_plot import display_forecast
+from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,10 +13,9 @@ logger = logging.getLogger(__name__)
 def show_simple_mode():
     """Render Simple Mode UI for non-technical users."""
     if st.session_state.state.data is None:
-        st.error("No data loaded. Please upload a CSV/Excel file in the sidebar.", icon="🚨")
+        st.error("No data loaded. Please upload a CSV file in the sidebar.", icon="🚨")
         return
 
-    # Layout: Sidebar, Main Content, Right Panel
     col_main, col_right = st.columns([4, 1])
     with st.sidebar:
         render_filters()
@@ -70,7 +65,7 @@ def render_filters():
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_central_controls():
-    """Render date range selector, forecast freeze, and method selection."""
+    """Render date range selector and forecast freeze."""
     st.subheader("Demand Planning Controls")
     data = st.session_state.state.data
     date_col = STANDARD_COLUMNS['date']
@@ -79,7 +74,7 @@ def render_central_controls():
         st.error("Dataset missing date column. Please upload a valid file.", icon="🚨")
         return
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
         try:
@@ -92,7 +87,7 @@ def render_central_controls():
                 key="date_range"
             )
         except Exception as e:
-            st.error(f"Invalid date column: {str(e)}. Ensure dates are in a valid format.", icon="🚨")
+            st.error(f"Invalid date column: {str(e)}.", icon="🚨")
             return
     
     with col2:
@@ -102,45 +97,19 @@ def render_central_controls():
             help="Lock the forecast to prevent updates until unfrozen.",
             key="freeze_forecast"
         )
-    
-    with col3:
-        st.selectbox(
-            "Forecast Method",
-            ["ARIMA"],
-            disabled=True,
-            help="Default method for simple forecasting. Technical Mode offers more options.",
-            key="forecast_method"
-        )
 
 def render_data_table():
-    """Render monthly demand table with performance gaps."""
+    """Render monthly demand table."""
     st.subheader("Monthly Demand Overview")
     data = filter_data(st.session_state.state.data)
     if data.empty:
         st.warning("No data matches the selected filters.", icon="⚠️")
         return
     
-    ts = DataProcessor.prepare_time_series(data)
-    if ts is None or ts.empty:
-        st.error("Unable to process data. Ensure date and demand columns are valid.", icon="🚨")
-        return
+    monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
+    monthly_data[STANDARD_COLUMNS['date']] = monthly_data[STANDARD_COLUMNS['date']].dt.strftime('%Y-%m')
     
-    monthly_data = ts.resample('ME').sum().reset_index()
-    monthly_data['Performance Gap'] = calculate_performance_gaps(ts)
-    
-    styled_data = monthly_data.style.apply(
-        lambda row: ['background-color: #ffcccc' if row['Performance Gap'] < 0 else '' for _ in row],
-        axis=1
-    ).format({
-        STANDARD_COLUMNS['demand']: "{:.2f}",
-        'Performance Gap': "{:.2f}%"
-    })
-    
-    st.dataframe(styled_data, use_container_width=True)
-    st.markdown(
-        '<div class="tooltip">ℹ️<span class="tooltiptext">Red highlights indicate months with demand below expectations.</span></div>',
-        unsafe_allow_html=True
-    )
+    st.dataframe(monthly_data, use_container_width=True)
 
 def render_forecast_section():
     """Render forecast generation and visualization section."""
@@ -149,40 +118,28 @@ def render_forecast_section():
         st.warning("Forecast is frozen. Uncheck 'Freeze Forecast' to generate a new forecast.", icon="⚠️")
         return
     
-    if st.session_state.forecast_generated and st.session_state.current_forecast is not None:
-        ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-        display_forecast(ts, st.session_state.current_forecast)
-        plot_historical_forecast_comparison(ts, st.session_state.current_forecast)
-        display_kpis()
-        display_top_skus()
-        display_discontinued_products()
-        display_recommendation_cards()
+    if st.session_state.get('forecast_generated', False) and "DeepAR" in st.session_state.state.forecasts:
+        display_forecast(st.session_state.state.data, st.session_state.state.forecasts["DeepAR"])
         return
     
     if st.button("Generate Forecast", type="primary", help="Generate a demand forecast"):
         with st.spinner("Generating forecast..."):
-            ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-            if ts is None or ts.empty:
-                st.error("Invalid data. Ensure date and demand columns are valid.", icon="🚨")
+            data = filter_data(st.session_state.state.data)
+            if data.empty:
+                st.error("No data after filtering. Adjust filters.", icon="🚨")
                 return
             try:
-                model_info = ForecastEngine.train_arima(ts)
-                st.session_state.state.models["ARIMA"] = model_info
-                forecast = cached_generate_forecast(ts, "ARIMA", DEFAULT_FORECAST_PERIOD, model_info)
-                if forecast is not None:
-                    update_forecast_state("ARIMA", DEFAULT_FORECAST_PERIOD, forecast)
-                    display_forecast(ts, forecast)
-                    plot_historical_forecast_comparison(ts, forecast)
-                    display_kpis()
-                    display_top_skus()
-                    display_discontinued_products()
-                    display_recommendation_cards()
-                    st.success("Forecast generated successfully!", icon="✅")
-                else:
-                    st.error("Failed to generate forecast. Check data quality.", icon="🚨")
+                forecast = ForecastEngine.forecast(data, forecast_horizon=DEFAULT_PREDICTION_LENGTH)
+                if forecast is None:
+                    st.error("Failed to generate forecast.", icon="🚨")
+                    return
+                st.session_state.state.forecasts["DeepAR"] = forecast
+                st.session_state.forecast_generated = True
+                display_forecast(data, forecast)
+                st.success("Forecast generated successfully!", icon="✅")
             except Exception as e:
                 logger.error(f"Forecast error: {str(e)}")
-                st.error(f"Failed to generate forecast: {str(e)}. Contact support.", icon="🚨")
+                st.error(f"Failed to generate forecast: {str(e)}.", icon="🚨")
 
 def render_sku_panel():
     """Render right-side panel with selected SKUs and quantities."""
@@ -207,3 +164,15 @@ def render_sku_panel():
     )
     st.button("Adjust Stock", help="Initiate stock adjustment for selected SKUs.", key="adjust_stock")
     st.markdown("</div>", unsafe_allow_html=True)
+
+def filter_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Apply filters to data based on session state."""
+    filters = st.session_state.get('filters', {'materials': [], 'countries': []})
+    filtered_data = data.copy()
+    
+    if filters['materials']:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(filters['materials'])]
+    if filters['countries']:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(filters['countries'])]
+    
+    return filtered_data

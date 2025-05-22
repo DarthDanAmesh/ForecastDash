@@ -1,5 +1,7 @@
+# app.py
 import streamlit as st
 import logging
+import pandas as pd
 from typing import Optional
 from cls_session_management import SessionState
 from ui_data_source import show_data_source_selection
@@ -15,14 +17,14 @@ from ui_model_management import show_model_management
 from funct_load_data import load_data
 from funct_feature_eng import enhance_feature_engineering
 from cls_data_preprocessor import DataProcessor
-from column_config import STANDARD_COLUMNS
-import pandas as pd
+from constants import STANDARD_COLUMNS
 import plotly.express as px
+import tempfile
 
 # Configuration
 st.set_page_config(page_title="Franke Demand Toolkit", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for consistent styling
+# Custom CSS (unchanged)
 st.markdown("""
     <style>
     .main { padding: 2rem; background-color: #f9fafb; }
@@ -96,7 +98,7 @@ def initialize_session_state():
     if 'mode' not in st.session_state:
         st.session_state.mode = "Simple"
     if 'model_params' not in st.session_state:
-        st.session_state.model_params = {"forecast_horizon": 12}
+        st.session_state.model_params = {"forecast_horizon": 2}  # Aligned with test.py
     if 'forecast_generated' not in st.session_state:
         st.session_state.forecast_generated = False
     if 'current_forecast' not in st.session_state:
@@ -104,10 +106,9 @@ def initialize_session_state():
 
 # Cache data loading
 @st.cache_data(show_spinner=False)
-def cached_load_data(_data_source: str, _file=None, _connection_string: str = "", 
-                    _api_config: dict = {}) -> Optional[pd.DataFrame]:
+def cached_load_data(_data_source: str, _uploaded_file=None, _connection_string: str = "", _api_config: dict = {}) -> Optional[pd.DataFrame]:
     try:
-        data = load_data()
+        data = load_data(_data_source, _uploaded_file, _connection_string, _api_config)
         if data is None:
             return None
         required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand']]
@@ -176,17 +177,17 @@ def render_sidebar():
     with st.sidebar:
         st.header("Control Panel")
         mode = st.radio(
-            "Mode",
+            "Select Mode",
             ["Simple", "Technical"],
             index=0 if st.session_state.mode == "Simple" else 1,
-            help="Simple for quick insights, Technical for advanced analysis.",
-            key="mode_select"
+            help="Simple Mode for quick insights, Technical Mode for detailed analysis."
         )
         st.session_state.mode = mode
+
         show_data_source_selection()
 
-        if st.button("Load Data", type="primary", help="Upload your demand data"):
-            with st.spinner("Loading data..."):
+        if st.button("Load Data", type="primary", help="Upload and process your demand data"):
+            with st.spinner("Loading and processing data..."):
                 data = cached_load_data(
                     st.session_state.state.data_source,
                     getattr(st.session_state.state, "uploaded_file", None),
@@ -197,11 +198,17 @@ def render_sidebar():
                     processed_data = DataProcessor.preprocess_data(data)
                     if processed_data is not None:
                         st.session_state.state.data = cached_feature_engineering(processed_data)
-                        st.success("Data loaded successfully!", icon="✅")
+                        st.success("Data loaded and processed successfully!", icon="✅")
                     else:
-                        st.error("Data preprocessing failed. Check column requirements.", icon="🚨")
+                        st.error(
+                            "Data preprocessing failed. Check column requirements and file format.", 
+                            icon="🚨"
+                        )
                 else:
-                    st.error("Failed to load data. Ensure CSV/Excel format.", icon="🚨")
+                    st.error(
+                        "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
+                        icon="🚨"
+                    )
 
 # Technical Mode dashboard
 def show_technical_mode():
@@ -215,34 +222,61 @@ def show_technical_mode():
     with tabs[1]:
         st.subheader("Model Parameters")
         forecast_horizon = st.slider(
-            "Forecast Horizon (months)", 1, 24, st.session_state.model_params["forecast_horizon"],
-            help="Set forecast duration."
+            "Forecast Horizon (weeks)", 1, 12, st.session_state.model_params["forecast_horizon"],
+            help="Set forecast duration (aligned with weekly data)."
         )
         st.session_state.model_params["forecast_horizon"] = forecast_horizon
         show_model_training()
     with tabs[2]:
         st.subheader("Demand Forecasts")
         show_forecasting()
-        st.subheader("Extended Forecast (18 Months)")
+        st.subheader("Extended Forecast")
         show_extended_forecasting()
     with tabs[3]:
-        region_performance = analyze_regional_performance(st.session_state.state.data)
-        fig1, fig2 = plot_regional_performance(region_performance)
-        st.plotly_chart(fig1, use_container_width=True)
-        st.plotly_chart(fig2, use_container_width=True)
-        st.dataframe(region_performance)
+        try:
+            region_performance = analyze_regional_performance(st.session_state.state.data)
+            fig1, fig2 = plot_regional_performance(region_performance)
+            st.plotly_chart(fig1, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True)
+            st.dataframe(region_performance['region'])
+        except Exception as e:
+            st.error(f"Failed to display regional performance: {str(e)}", icon="🚨")
     with tabs[4]:
-        ts = DataProcessor.prepare_time_series(st.session_state.state.data)
-        if ts is not None and not ts.empty:
-            anomalies = detect_sales_anomalies(ts)
-            st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
-            if not anomalies.empty and 'is_anomaly' in anomalies.columns:
-                st.subheader("Detected Anomalies")
-                anomaly_table = anomalies[anomalies['is_anomaly']].reset_index()
-                anomaly_table.columns = ['Date', 'Value', 'Rolling Mean', 'Upper Bound', 'Lower Bound', 'Is Anomaly']
-                st.dataframe(anomaly_table)
-            else:
-                st.warning("No anomalies detected.", icon="⚠️")
+        if st.session_state.state.data is not None and not st.session_state.state.data.empty:
+            try:
+                # Convert wide-format DataFrame to long format
+                data = st.session_state.state.data
+                if all(col in data.columns for col in [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['material']]):
+                    anomaly_data = data
+                else:
+                    # Assume wide format with date index and material columns
+                    logger.info(f"Converting wide-format DataFrame to long format. Columns: {list(data.columns)}")
+                    anomaly_data = data.reset_index().melt(
+                        id_vars=[STANDARD_COLUMNS['date']] if STANDARD_COLUMNS['date'] in data.index.name else ['index'],
+                        value_vars=[col for col in data.columns if col not in [STANDARD_COLUMNS['date'], 'index']],
+                        var_name=STANDARD_COLUMNS['material'],
+                        value_name=STANDARD_COLUMNS['demand']
+                    )
+                    if 'index' in anomaly_data.columns:
+                        anomaly_data = anomaly_data.rename(columns={'index': STANDARD_COLUMNS['date']})
+                    anomaly_data = anomaly_data.dropna(subset=[STANDARD_COLUMNS['demand']])
+                    logger.info(f"Converted to long format. Columns: {list(anomaly_data.columns)}")
+                
+                anomalies = detect_sales_anomalies(anomaly_data)
+                if anomalies is not None and not anomalies.empty:
+                    st.plotly_chart(plot_anomalies(anomalies), use_container_width=True)
+                    if 'is_anomaly' in anomalies.columns:
+                        st.subheader("Detected Anomalies")
+                        anomaly_table = anomalies[anomalies['is_anomaly']].reset_index()
+                        anomaly_table.columns = ['Index', 'Material', 'Date', 'Demand', 'Rolling Mean', 'Upper Bound', 'Lower Bound', 'Is Anomaly']
+                        st.dataframe(anomaly_table)
+                    else:
+                        st.warning("No anomalies detected.", icon="⚠️")
+                else:
+                    st.warning("No anomalies detected or data is invalid.", icon="⚠️")
+            except Exception as e:
+                st.error(f"Failed to perform anomaly detection: {str(e)}", icon="🚨")
+                logger.error(f"Anomaly detection failed: {str(e)}", exc_info=True)
     with tabs[5]:
         st.subheader("Discontinued Products")
         threshold = st.slider("Months without orders", 2, 12, 3, help="Threshold for discontinuation.")
@@ -267,7 +301,7 @@ def main():
 
     if st.session_state.state.data is None:
         st.info(
-            "Upload a CSV/Excel file to start. Required columns: date, demand. Optional: material, country.",
+            "Upload a CSV file to start. Required columns: date, demand. Optional: material, country.",
             icon="ℹ️"
         )
         return
