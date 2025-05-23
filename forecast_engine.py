@@ -4,7 +4,10 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Dict, Any
 import logging
+
 from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, DEFAULT_FREQ
+from cls_model_trainer import ModelTrainer
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -38,17 +41,15 @@ class ForecastEngine:
 
     @staticmethod
     def forecast(df: pd.DataFrame, forecast_horizon: int = DEFAULT_PREDICTION_LENGTH, 
-                 freq: str = DEFAULT_FREQ) -> Optional[pd.DataFrame]:
-        """Generate forecasts using DeepAR, falling back to XGBoost if DeepAR fails."""
+                 freq: str = DEFAULT_FREQ) -> Optional[dict]:
+        """Generate forecasts using DeepAR, falling back to XGBoost if DeepAR fails. Returns dict for SHAP explainability."""
         try:
             if df.empty or STANDARD_COLUMNS['material'] not in df.columns:
                 logger.error("Invalid input: DataFrame empty or material column missing")
                 st.error("Data must include material column for SKU-level forecasting.", icon="🚨")
                 return None
 
-            from deepar_model import DeepARModel
-            from xgboost_model import XGBoostModel
-            from cls_model_trainer import ModelTrainer
+            
 
             # Try DeepAR
             deepar_params = {
@@ -61,16 +62,58 @@ class ForecastEngine:
                 forecasts = deepar_model.predict(df, periods=forecast_horizon)
                 if forecasts is not None and not forecasts.empty:
                     logger.info("DeepAR forecast generated successfully")
-                    return forecasts
+                    # Assume DeepARModel exposes feature names used for training
+                    feature_names = getattr(deepar_model, 'feature_names_', None)
+                    # For SHAP, use the same features as training (excluding target)
+                    features_for_shap = df.drop(columns=[STANDARD_COLUMNS['demand']]) if STANDARD_COLUMNS['demand'] in df.columns else df
+                    return {
+                        'forecast': forecasts,
+                        'model': deepar_model,
+                        'features': features_for_shap,
+                        'model_type': 'deepar',
+                        'feature_names': feature_names
+                    }
 
             # Fallback to XGBoost
             st.warning("DeepAR failed, falling back to XGBoost.", icon="⚠️")
-            xgb_model = XGBoostModel(df, forecast_horizon=forecast_horizon)
-            xgb_model.train()
-            forecasts = xgb_model.predict(periods=forecast_horizon)
-            if forecasts is not None and not forecasts.empty:
-                logger.info("XGBoost forecast generated successfully")
-                return forecasts
+            # Create features for XGBoost
+            df_feat = ForecastEngine.create_features(df, target_col=STANDARD_COLUMNS['demand'])
+            if df_feat.empty:
+                logger.error("Feature creation for XGBoost failed.")
+                st.error("Feature creation for XGBoost failed.", icon="🚨")
+                return None
+            X = df_feat.drop(columns=[STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['date']])
+            y = df_feat[STANDARD_COLUMNS['demand']]
+            xgb_model = ModelTrainer.train_xgboost(X, y)
+            if xgb_model:
+                from xgboost import XGBRegressor
+                # Predict using XGBoostModel wrapper if needed, else use model directly
+                xgb_forecast = None
+                try:
+                    from deepar_model import DeepARModel
+                    from xgboost_model import XGBoostModel
+                    # Try to use the XGBoostModel wrapper if available
+                    xgb_model_wrapper = XGBoostModel(df, forecast_horizon=forecast_horizon)
+                    xgb_model_wrapper.model = xgb_model
+                    xgb_forecast = xgb_model_wrapper.predict(periods=forecast_horizon)
+                except Exception as e:
+                    logger.warning(f"XGBoostModel wrapper failed: {str(e)}. Using model.predict instead.")
+                    # Fallback: just use model.predict for the last available row
+                    last_row = X.iloc[[-1]]
+                    preds = xgb_model.predict(last_row)
+                    xgb_forecast = pd.DataFrame({
+                        STANDARD_COLUMNS['date']: [df[STANDARD_COLUMNS['date']].max() + pd.Timedelta(weeks=i+1) for i in range(forecast_horizon)],
+                        'forecast': preds[0] if hasattr(preds, '__getitem__') else preds
+                    })
+                if xgb_forecast is not None and not xgb_forecast.empty:
+                    logger.info("XGBoost forecast generated successfully")
+                    return {
+                        'forecast': xgb_forecast,
+                        'model': xgb_model,
+                        'features': X,
+                        'model_type': 'xgboost',
+                        'feature_names': X.columns.tolist()
+                    }
 
             logger.error("Both DeepAR and XGBoost failed to generate forecasts")
             st.error("Failed to generate forecasts.", icon="🚨")

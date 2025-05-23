@@ -208,3 +208,47 @@ class DeepARModel:
             logger.error(f"DeepAR prediction failed: {str(e)}", exc_info=True)
             st.error(f"DeepAR prediction failed: {str(e)}.", icon="🚨")
             return None
+    #SHAP
+    def predict_for_shap(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict method for SHAP KernelExplainer.
+        X: DataFrame or numpy array of features (should match the columns used for training, including time_idx, group_ids, etc.)
+        Returns: 1D numpy array of mean predictions for each row.
+        """
+        if not self.model or not self.training_dataset:
+            raise RuntimeError("DeepAR model is not trained or dataset is missing.")
+
+        # Convert numpy array to DataFrame if needed
+        if isinstance(X, np.ndarray):
+            if hasattr(self, 'feature_names_') and self.feature_names_ is not None:
+                columns = self.feature_names_
+            else:
+                columns = self.df.drop(columns=[self.target]).columns.tolist()
+            X = pd.DataFrame(X, columns=columns)
+
+        # Ensure the target column exists (fill with NaN if missing)
+        if self.target not in X.columns:
+            X[self.target] = np.nan
+
+        # Ensure the time_idx column exists and is integer
+        if self.time_idx in X.columns:
+            X[self.time_idx] = X[self.time_idx].astype('int64')
+
+        try:
+            pred_dataset = TimeSeriesDataSet.from_dataset(
+                self.training_dataset,
+                X,
+                predict=True,
+                stop_randomization=True
+            )
+            pred_dataloader = pred_dataset.to_dataloader(train=False, batch_size=self.batch_size, num_workers=0)
+            predictions = self.model.predict(pred_dataloader, mode='raw', return_x=True)
+            output = predictions.output
+            mean_preds = []
+            for batch_idx in range(output.prediction.shape[0]):
+                mean_pred = output.prediction[batch_idx, 0, :].mean().item()
+                mean_preds.append(mean_pred)
+            return np.array(mean_preds)
+        except Exception as e:
+            logger.error(f"predict_for_shap failed: {str(e)}", exc_info=True)
+            raise

@@ -1,7 +1,7 @@
 # cls_session_management.py
 import streamlit as st
 import pandas as pd
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from threading import Lock
 import hashlib
 import json
@@ -23,6 +23,7 @@ class SessionState:
         self._api_config: Optional[Dict[str, Any]] = None
         self._data_fingerprints: Dict[str, str] = {}
         self._accuracy_data: Dict[str, Dict[str, float]] = {}
+        self._feedback: List[Dict[str, Any]] = []  # Add feedback storage
 
     @property
     def data(self) -> Optional[pd.DataFrame]:
@@ -130,6 +131,20 @@ class SessionState:
     def accuracy_data(self) -> Dict[str, Dict[str, float]]:
         """Get the accuracy data."""
         return self._accuracy_data
+    
+    @property
+    def feedback(self) -> List[Dict[str, Any]]:
+        """Get the feedback list."""
+        return self._feedback
+    
+    def add_feedback(self, feedback_entry: Dict[str, Any]) -> None:
+        """Add a feedback entry."""
+        with self._lock:
+            self._feedback.append(feedback_entry)
+    
+    def get_pending_feedback(self) -> List[Dict[str, Any]]:
+        """Get all pending feedback entries."""
+        return [f for f in self._feedback if f.get('status') == 'pending']
 
     def _update_data_fingerprint(self) -> None:
         """Update the data fingerprint based on the current DataFrame."""
@@ -150,6 +165,7 @@ class SessionState:
             self._forecasts = {}
             self._data_fingerprints = {}
             self._accuracy_data = {}
+            self._feedback = []
             if full_reset:
                 self._data_source = None
                 self._connection_string = None

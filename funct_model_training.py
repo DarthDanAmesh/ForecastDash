@@ -1,11 +1,12 @@
 # funct_model_training.py
 import streamlit as st
 import pandas as pd
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from cls_data_preprocessor import DataProcessor
 from forecast_engine import ForecastEngine
 from cls_session_management import SessionState
 from constants import DEFAULT_PREDICTION_LENGTH, STANDARD_COLUMNS
+from cls_model_trainer import ModelTrainer
 
 def validate_training_data(df: pd.DataFrame, min_length: int = 12) -> tuple[bool, str]:
     """Validate DataFrame for model training."""
@@ -77,6 +78,26 @@ def render_training_ui(mode: str) -> Optional[Dict]:
 
     return {"forecast_period": forecast_period}
 
+def show_model_explainability(model: Any, features: pd.DataFrame, model_type: str, feature_names: list = None):
+    """
+    Display SHAP explainability using a Plotly chart in a tabbed interface.
+    """
+    tabs = st.tabs(["Overview", "Feature Importance", "SHAP Summary Plot"])
+    with tabs[0]:
+        st.markdown("""
+        **Model Explainability Overview**
+        
+        SHAP (SHapley Additive exPlanations) helps you understand which features drive the model's predictions. This can guide improvements and build trust in the model's results.
+        """)
+    with tabs[1]:
+        st.info("Feature importance is visualized in the SHAP summary plot. Higher mean |SHAP value| indicates greater impact on predictions.")
+    with tabs[2]:
+        fig = ModelTrainer.explain_forecast(model, features, model_type, feature_names)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Unable to generate SHAP summary plot for this model.")
+
 def show_model_training() -> None:
     """Render UI for generating forecasts."""
     if 'state' not in st.session_state or not isinstance(st.session_state.state, SessionState):
@@ -101,15 +122,31 @@ def show_model_training() -> None:
     if st.button("🚀 Generate Forecast", help="Generate demand forecasts."):
         with st.spinner("Generating forecast..."):
             try:
-                forecast = ForecastEngine.forecast(df, forecast_horizon=config["forecast_period"])
-                if forecast is None:
+                result = ForecastEngine.forecast(df, forecast_horizon=config["forecast_period"])
+                if result is None or (isinstance(result, dict) and result.get('forecast') is None):
                     st.error("Failed to generate forecast.", icon="🚨")
                     return
 
-                st.session_state.state.forecasts["DeepAR"] = forecast
-                st.session_state.state.models["DeepAR"] = {"trained_at": pd.Timestamp.now()}
+                if isinstance(result, dict):
+                    st.session_state.state.forecasts["DeepAR"] = result.get('forecast')
+                    st.session_state.state.models["DeepAR"] = result.get('model')
+                    st.session_state.state.last_trained_model_info = result
+                else:
+                    st.session_state.state.forecasts["DeepAR"] = result
+                    st.session_state.state.models["DeepAR"] = {"trained_at": pd.Timestamp.now()}
+                    st.session_state.state.last_trained_model_info = None
                 st.success("Forecast generated successfully!", icon="✅")
                 st.toast("✅ Forecast ready!")
             except Exception as e:
                 st.error(f"Unexpected error: {str(e)}.", icon="🚨")
                 st.toast("❌ Forecast failed.")
+
+    model_info = getattr(st.session_state.state, 'last_trained_model_info', None)
+    if model_info and all(k in model_info for k in ['model', 'features', 'model_type']):
+        with st.expander("🔎 Model Explanation (SHAP)", expanded=False):
+            show_model_explainability(
+                model_info['model'],
+                model_info['features'],
+                model_info['model_type'],
+                model_info.get('feature_names')
+            )
