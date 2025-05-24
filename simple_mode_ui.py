@@ -345,12 +345,28 @@ def collect_feedback(user_id: str, forecast_id: str, feedback_type: str, sku: Op
 
 def filter_data(data: pd.DataFrame) -> pd.DataFrame:
     """Apply filters to data based on session state."""
+    if data is None:
+        return pd.DataFrame()
+        
     filters = st.session_state.get('filters', {'materials': [], 'countries': []})
     filtered_data = data.copy()
     
+    # Apply material filter
     if filters['materials']:
         filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(filters['materials'])]
+    
+    # Apply country filter
     if filters['countries']:
         filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(filters['countries'])]
+    
+    # Apply date range filter
+    if 'date_range' in st.session_state and st.session_state.date_range:
+        date_range = st.session_state.date_range
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            filtered_data = filtered_data[
+                (pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']]) >= pd.to_datetime(start_date)) &
+                (pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']]) <= pd.to_datetime(end_date))
+            ]
     
     return filtered_data
