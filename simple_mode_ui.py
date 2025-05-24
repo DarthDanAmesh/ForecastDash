@@ -14,6 +14,9 @@ import logging
 import requests
 import json
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 def detect_mobile():
     """Detect if user is on mobile device."""
     # Simple mobile detection using viewport width
@@ -278,7 +281,6 @@ def render_data_table():
         st.error(f"Data is missing one or more required columns: {', '.join(required_cols)}.", icon="🚨")
         return
 
-    # Added a new tab for SKU Demand Trend
     tab1, tab2, tab3, tab4 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs", "SKU Demand Trend"])
 
     with tab1:
@@ -384,6 +386,30 @@ def render_data_table():
                     sku_summary_df_trend = pd.merge(sku_total_demand, sku_history_list, on=material_col, how='left')
                     sku_summary_df_trend['demand_history'] = sku_summary_df_trend['demand_history'].apply(lambda x: x if isinstance(x, list) else [])
 
+                # --- Integration of AI Adjusted Forecast ---
+                sku_summary_df_trend['adjusted_demand_trend'] = [[] for _ in range(len(sku_summary_df_trend))] # Initialize with empty lists
+                max_adjusted_demand_history = 0
+
+                if hasattr(st.session_state.state, 'forecasts') and "DeepAR" in st.session_state.state.forecasts and not st.session_state.state.forecasts["DeepAR"].empty:
+                    adjusted_forecast_df = st.session_state.state.forecasts["DeepAR"].copy()
+                    if not adjusted_forecast_df.empty and material_col in adjusted_forecast_df.columns and 'forecast' in adjusted_forecast_df.columns:
+                        adjusted_forecast_df[date_col] = pd.to_datetime(adjusted_forecast_df[date_col])
+                        
+                        # Group adjusted forecast by material to get a list of forecast values
+                        adjusted_trend_data = adjusted_forecast_df.groupby(material_col)['forecast'].apply(list).reset_index(name='adjusted_demand_trend_temp')
+                        
+                        # Merge with sku_summary_df_trend
+                        sku_summary_df_trend = pd.merge(sku_summary_df_trend, adjusted_trend_data, on=material_col, how='left')
+                        # Fill NaNs from merge (for SKUs with historical but no adjusted forecast) with empty lists
+                        sku_summary_df_trend['adjusted_demand_trend'] = sku_summary_df_trend['adjusted_demand_trend_temp'].apply(lambda x: x if isinstance(x, list) else [])
+                        sku_summary_df_trend.drop(columns=['adjusted_demand_trend_temp'], inplace=True, errors='ignore')
+
+                        # Calculate max for y-axis scaling
+                        for history in sku_summary_df_trend['adjusted_demand_trend']:
+                            if history:
+                                max_adjusted_demand_history = max(max_adjusted_demand_history, max(history) if history else 0)
+                # --- End Integration ---
+
                 sku_summary_df_trend.rename(columns={material_col: 'SKU', 'total_demand': 'Total Demand'}, inplace=True)
 
                 if sku_summary_df_trend.empty:
@@ -394,31 +420,41 @@ def render_data_table():
                         for history in sku_summary_df_trend['demand_history']:
                             if history:
                                 max_demand_history = max(max_demand_history, max(history) if history else 0)
-                    y_max_chart = max(10, max_demand_history) # Ensure y_max is at least 10
+                    
+                    # Determine y_max for charts, considering both historical and adjusted trends
+                    y_max_chart = max(10, max_demand_history, max_adjusted_demand_history)
+
+                    column_config = {
+                        "SKU": st.column_config.TextColumn("SKU Code"),
+                        "Total Demand": st.column_config.NumberColumn(
+                            "Total Demand",
+                            help="Total demand for the SKU over the selected period",
+                            format="%.2f"
+                        ),
+                        "demand_history": st.column_config.LineChartColumn(
+                            "Demand Trend (Monthly)", 
+                            help="Monthly historical demand trend for the SKU",
+                            y_min=0, 
+                            y_max=int(y_max_chart * 1.1) 
+                        ),
+                    }
+
+                    # Add adjusted demand trend column if data exists
+                    if 'adjusted_demand_trend' in sku_summary_df_trend.columns and sku_summary_df_trend['adjusted_demand_trend'].apply(lambda x: bool(x)).any():
+                        column_config["adjusted_demand_trend"] = st.column_config.TextColumn(
+                            "AI Adjusted Trend Data",
+                            help="Monthly AI-adjusted demand data points for the SKU"
+                        )
 
                     st.dataframe(
                         sku_summary_df_trend,
-                        column_config={
-                            "SKU": st.column_config.TextColumn("SKU Code"),
-                            "Total Demand": st.column_config.NumberColumn(
-                                "Total Demand",
-                                help="Total demand for the SKU over the selected period",
-                                format="%.2f"
-                            ),
-                            "demand_history": st.column_config.LineChartColumn(
-                                "Demand Trend (Monthly)", 
-                                help="Monthly demand trend for the SKU",
-                                y_min=0, 
-                                y_max=int(y_max_chart * 1.1) # Add some padding
-                            ),
-                        },
+                        column_config=column_config,
                         use_container_width=True,
                         hide_index=True,
                         key="sku_trend_df", # Unique key for this dataframe
                         on_select="rerun",
                         selection_mode=["multi-row", "multi-column"] 
                     )
-                    # Store selection for chatbot context
                     if st.session_state.get("sku_trend_df"):
                         st.session_state.data_table_selection = st.session_state.sku_trend_df.selection
             
