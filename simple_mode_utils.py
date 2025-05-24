@@ -105,6 +105,17 @@ def guide_adjustment(forecast: pd.DataFrame, historical_data: pd.DataFrame) -> p
 
 def render_adjustment_wizard():
     """Render the step-by-step adjustment wizard with AI suggestions."""
+    
+    # Check if forecast has been generated before displaying the wizard
+    if not hasattr(st.session_state, 'state') or \
+       not hasattr(st.session_state.state, 'forecasts') or \
+       "DeepAR" not in st.session_state.state.forecasts or \
+       st.session_state.state.forecasts["DeepAR"].empty:
+        # No forecast available, don't display the wizard
+        st.sidebar.info("📊 Generate a forecast to enable the Adjustment Wizard")
+        return
+    
+    # Forecast exists, display the wizard
     st.sidebar.markdown("### 🧙‍♂️ Adjustment Wizard")
     
     # Initialize wizard state

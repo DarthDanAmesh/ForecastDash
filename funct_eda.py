@@ -157,14 +157,14 @@ def show_data_exploration():
     
     with geo_tab:
         st.subheader("Geographical Distribution")
+        # In the geo_tab section
         try:
             renderer.chart(0)
         except Exception as e:
             logger.error(f"Error rendering geographical chart: {str(e)}")
             st.info("Create geographical charts first using the Explore UI", icon="ℹ️")
-    
-    with product_tab:
-        st.subheader("Product Analysis")
+        
+        # In the product_tab section
         try:
             renderer.chart(1)
         except Exception as e:
