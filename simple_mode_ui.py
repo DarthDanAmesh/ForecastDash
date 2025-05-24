@@ -5,11 +5,12 @@ from typing import Optional
 from cls_data_preprocessor import DataProcessor
 from forecast_engine import ForecastEngine
 from funct_shw_forecast_plot import display_forecast
-from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH
+from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, COUNTRY_CODE_MAP
 from simple_mode_utils import render_adjustment_wizard
 import streamlit.components.v1 as components
 import logging
 import plotly.express as px
+
 
 logger = logging.getLogger(__name__)
 
@@ -245,14 +246,22 @@ def render_data_table():
         if STANDARD_COLUMNS['country'] in data.columns:
             try:
                 country_summary = data.groupby(STANDARD_COLUMNS['country'])[STANDARD_COLUMNS['demand']].sum().reset_index()
-                fig = px.bar(
-                    country_summary,
-                    x=STANDARD_COLUMNS['country'],
-                    y=STANDARD_COLUMNS['demand'],
-                    title="Demand by Country",
-                    labels={STANDARD_COLUMNS['demand']: 'Total Demand'}
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                
+                # Filter for countries in COUNTRY_CODE_MAP and map to full names
+                country_summary = country_summary[country_summary[STANDARD_COLUMNS['country']].isin(COUNTRY_CODE_MAP.keys())]
+                country_summary['country_full_name'] = country_summary[STANDARD_COLUMNS['country']].map(COUNTRY_CODE_MAP)
+                
+                if country_summary.empty:
+                    st.info("No data available for specified countries after filtering.")
+                else:
+                    fig = px.bar(
+                        country_summary,
+                        x='country_full_name', # Use full name for x-axis
+                        y=STANDARD_COLUMNS['demand'],
+                        title="Demand by Country (Filtered)",
+                        labels={STANDARD_COLUMNS['demand']: 'Total Demand', 'country_full_name': 'Country'}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 logger.error(f"Error creating country bar plot: {str(e)}")
                 st.error(f"Failed to create country bar plot: {str(e)}.", icon="🚨")
