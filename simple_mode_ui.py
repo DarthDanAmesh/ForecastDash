@@ -1,7 +1,9 @@
 # simple_mode_ui.py
 import streamlit as st
 import pandas as pd
-from typing import Optional
+import plotly.express as px
+import time
+from typing import Optional, Dict, Any
 from cls_data_preprocessor import DataProcessor
 from forecast_engine import ForecastEngine
 from funct_shw_forecast_plot import display_forecast
@@ -9,10 +11,8 @@ from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, COUNTRY_CODE_
 from simple_mode_utils import render_adjustment_wizard
 import streamlit.components.v1 as components
 import logging
-import plotly.express as px
-
-
-logger = logging.getLogger(__name__)
+import requests
+import json
 
 def detect_mobile():
     """Detect if user is on mobile device."""
@@ -126,7 +126,7 @@ def show_simple_mode():
             render_chatbot_interface() # <<< Added chatbot here
             render_adjustment_wizard()
         with col_right:
-            render_sku_panel()
+            #render_sku_panel()
             render_feedback_widget()
 
 def render_mobile_controls():
@@ -265,7 +265,7 @@ def render_central_controls():
     }
 
 def render_data_table():
-    """Render data overview in tabs with selection: Monthly Demand, Demand by Country, and Top SKUs."""
+    """Render data overview in tabs with selection: Monthly Demand, Demand by Country, Top SKUs, and SKU Demand Trend."""
     st.subheader("Data Overview (Select rows/columns for context)")
     
     data = filter_data(st.session_state.state.data)
@@ -278,7 +278,8 @@ def render_data_table():
         st.error(f"Data is missing one or more required columns: {', '.join(required_cols)}.", icon="🚨")
         return
 
-    tab1, tab2, tab3 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs"])
+    # Added a new tab for SKU Demand Trend
+    tab1, tab2, tab3, tab4 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs", "SKU Demand Trend"])
 
     with tab1:
         st.markdown("#### Monthly Demand Overview")
@@ -294,7 +295,7 @@ def render_data_table():
                 selection_mode=["multi-row", "multi-column"]
             )
             # Store selection
-            if st.session_state.monthly_demand_df:
+            if st.session_state.get("monthly_demand_df"):
                  st.session_state.data_table_selection = st.session_state.monthly_demand_df.selection
 
         except Exception as e:
@@ -324,7 +325,7 @@ def render_data_table():
                     st.plotly_chart(fig, use_container_width=True)
                     # Optionally, display the country_summary dataframe for selection
                     st.dataframe(country_summary, key="country_summary_df", on_select="rerun", selection_mode=["multi-row"])
-                    if st.session_state.country_summary_df:
+                    if st.session_state.get("country_summary_df"):
                         st.session_state.data_table_selection = st.session_state.country_summary_df.selection
 
             except Exception as e:
@@ -347,15 +348,86 @@ def render_data_table():
             )
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(sku_summary, key="top_skus_df", on_select="rerun", selection_mode=["multi-row"])
-            if st.session_state.top_skus_df:
+            if st.session_state.get("top_skus_df"):
                 st.session_state.data_table_selection = st.session_state.top_skus_df.selection
 
         except Exception as e:
             logger.error(f"Error creating SKU bar plot: {str(e)}")
             st.error(f"Failed to create SKU bar plot: {str(e)}.", icon="🚨")
 
+    with tab4: # New tab for SKU Demand Trend
+        st.markdown("#### SKU Demand Trend")
+        material_col = STANDARD_COLUMNS['material']
+        demand_col = STANDARD_COLUMNS['demand']
+        date_col = STANDARD_COLUMNS['date']
+
+        if not all(col in data.columns for col in [material_col, demand_col, date_col]):
+            st.warning("Data is missing required columns (material, demand, or date) for SKU trend view.", icon="⚠️")
+        else:
+            try:
+                # Ensure date column is datetime
+                data_trend = data.copy()
+                data_trend[date_col] = pd.to_datetime(data_trend[date_col])
+
+                sku_demand_history = data_trend.groupby([
+                    material_col,
+                    pd.Grouper(key=date_col, freq='ME') 
+                ])[demand_col].sum().reset_index()
+
+                sku_history_list = sku_demand_history.groupby(material_col)[demand_col].apply(list).reset_index(name='demand_history')
+                sku_total_demand = data_trend.groupby(material_col)[demand_col].sum().reset_index(name='total_demand')
+
+                if sku_history_list.empty:
+                    sku_summary_df_trend = sku_total_demand
+                    sku_summary_df_trend['demand_history'] = [[] for _ in range(len(sku_total_demand))]
+                else:
+                    sku_summary_df_trend = pd.merge(sku_total_demand, sku_history_list, on=material_col, how='left')
+                    sku_summary_df_trend['demand_history'] = sku_summary_df_trend['demand_history'].apply(lambda x: x if isinstance(x, list) else [])
+
+                sku_summary_df_trend.rename(columns={material_col: 'SKU', 'total_demand': 'Total Demand'}, inplace=True)
+
+                if sku_summary_df_trend.empty:
+                    st.info("No SKU data to display after processing for trends.")
+                else:
+                    max_demand_history = 0
+                    if 'demand_history' in sku_summary_df_trend.columns:
+                        for history in sku_summary_df_trend['demand_history']:
+                            if history:
+                                max_demand_history = max(max_demand_history, max(history) if history else 0)
+                    y_max_chart = max(10, max_demand_history) # Ensure y_max is at least 10
+
+                    st.dataframe(
+                        sku_summary_df_trend,
+                        column_config={
+                            "SKU": st.column_config.TextColumn("SKU Code"),
+                            "Total Demand": st.column_config.NumberColumn(
+                                "Total Demand",
+                                help="Total demand for the SKU over the selected period",
+                                format="%.2f"
+                            ),
+                            "demand_history": st.column_config.LineChartColumn(
+                                "Demand Trend (Monthly)", 
+                                help="Monthly demand trend for the SKU",
+                                y_min=0, 
+                                y_max=int(y_max_chart * 1.1) # Add some padding
+                            ),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                        key="sku_trend_df", # Unique key for this dataframe
+                        on_select="rerun",
+                        selection_mode=["multi-row", "multi-column"] 
+                    )
+                    # Store selection for chatbot context
+                    if st.session_state.get("sku_trend_df"):
+                        st.session_state.data_table_selection = st.session_state.sku_trend_df.selection
+            
+            except Exception as e:
+                logger.error(f"Error creating SKU demand trend view: {str(e)}")
+                st.error(f"Failed to create SKU demand trend view: {str(e)}.", icon="🚨")
+
     # Display current selection (for debugging or context)
-    # st.write("Current DataFrame Selection:", st.session_state.data_table_selection)
+    # st.write("Current DataFrame Selection:", st.session_state.get('data_table_selection'))
 
 def render_forecast_section():
     """Render forecast generation and visualization section."""
@@ -586,19 +658,56 @@ def filter_data(data: pd.DataFrame) -> pd.DataFrame:
     return filtered_data
 
 
-def chat_stream(prompt, selection_context):
-    # Modify this to actually call your LLM with the prompt and selection_context
-    # For now, it's a placeholder that includes the selection
-    context_str = "No selection." 
+def chat_stream(prompt: str, selection_context: Dict[str, Any]):
+    """Generates a response from the Ollama API using a streaming connection."""
+    context_str = "No specific data selection provided by the user for this query."
     if selection_context and (selection_context.get('rows') or selection_context.get('columns')):
-        context_str = f"Selected context: Rows {selection_context.get('rows')}, Columns {selection_context.get('columns')}."
-    
-    response = f'You said, "{prompt}". {context_str} ...interesting.'
-    for char in response:
-        yield char
-        time.sleep(0.02)
+        # Be mindful of context length limits for the LLM
+        context_str = f"The user has selected the following data context: Rows {selection_context.get('rows')}, Columns {selection_context.get('columns')}. Please consider this context if relevant to the query."
 
-def save_feedback(index):
+    full_prompt = f"{context_str}\n\nUser Query: {prompt}"
+
+    ollama_api_url = "http://localhost:11434/api/chat" # Default Ollama API endpoint for chat
+    # You can change the model name to any qwen2 model you have pulled, e.g., "qwen2:0.5b", "qwen2:1.5b", "qwen2:7b" or "qwen2:latest"
+    model_name = "qwen2:0.5b" # Using a smaller Qwen2 model as an example
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant analyzing sales and forecast data."},
+            {"role": "user", "content": full_prompt}
+        ],
+        "stream": True
+    }
+
+    try:
+        with requests.post(ollama_api_url, json=payload, stream=True) as response:
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        json_chunk = json.loads(line.decode('utf-8'))
+                        if 'message' in json_chunk and 'content' in json_chunk['message']:
+                            content_piece = json_chunk['message']['content']
+                            yield content_piece
+                        if json_chunk.get("done"):
+                            break # Stream finished
+                    except json.JSONDecodeError:
+                        logger.warning(f"Ollama stream: Could not decode JSON line: {line}")
+                        continue # Skip malformed lines
+                    except Exception as e:
+                        logger.error(f"Error processing Ollama stream chunk: {e}")
+                        yield f"Error: {e}"
+                        break
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ollama API request failed: {e}")
+        yield f"Error: Could not connect to Ollama or the model. Please ensure Ollama is running and the model '{model_name}' is available. Details: {e}"
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in chat_stream: {e}")
+        yield f"Error: An unexpected error occurred. {e}"
+
+
+def save_feedback(feedback_text: str, rating: str, chat_history: list):
     # Check if the feedback key exists before accessing
     feedback_key = f"feedback_{index}"
     if feedback_key in st.session_state:
