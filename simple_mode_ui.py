@@ -373,27 +373,88 @@ def render_forecast_section():
                 st.error(f"Failed to generate forecast: {str(e)}.", icon="🚨")
 
 def render_sku_panel():
-    """Render right-side panel with selected SKUs and quantities."""
+    """Render right-side panel with selected SKUs, quantities, and demand history."""
     st.markdown("<div class='sidebar-filter'>", unsafe_allow_html=True)
-    st.subheader("Selected SKUs")
-    data = filter_data(st.session_state.state.data)
-    if data.empty:
-        st.info("No SKUs selected. Use sidebar filters.", icon="ℹ️")
+    st.subheader("Selected SKUs Overview")
+    
+    data = filter_data(st.session_state.state.data) # Assumes filter_data is defined and works
+    if data is None or data.empty:
+        st.info("No SKUs selected or data available for selected filters.", icon="ℹ️")
         return
     
     material_col = STANDARD_COLUMNS['material']
-    if material_col not in data.columns:
-        st.warning("Material column missing.", icon="⚠️")
+    demand_col = STANDARD_COLUMNS['demand']
+    date_col = STANDARD_COLUMNS['date']
+
+    if not all(col in data.columns for col in [material_col, demand_col, date_col]):
+        st.warning("Data is missing required columns (material, demand, or date) for SKU panel.", icon="⚠️")
         return
-    
-    sku_summary = data.groupby(material_col)[STANDARD_COLUMNS['demand']].sum().reset_index()
-    sku_summary.columns = ['SKU', 'Total Demand']
-    
+
+    # Ensure date column is datetime
+    try:
+        data[date_col] = pd.to_datetime(data[date_col])
+    except Exception as e:
+        logger.error(f"Error converting date column in render_sku_panel: {e}")
+        st.warning(f"Could not process date column: {e}", icon="⚠️")
+        return
+
+    # Create demand history: group by SKU and month, then list demand values
+    # Resample to monthly frequency. You can change 'ME' (Month End) to 'W' (Weekly) or other frequencies.
+    sku_demand_history = data.groupby([
+        material_col,
+        pd.Grouper(key=date_col, freq='ME') # Group by SKU and Month End
+    ])[demand_col].sum().reset_index()
+
+    # Pivot to get SKUs as rows and monthly demand as a list
+    sku_history_list = sku_demand_history.groupby(material_col)[demand_col].apply(list).reset_index(name='demand_history')
+
+    # Get total demand for summary
+    sku_total_demand = data.groupby(material_col)[demand_col].sum().reset_index(name='total_demand')
+
+    # Merge total demand with history
+    if sku_history_list.empty:
+        sku_summary_df = sku_total_demand
+        sku_summary_df['demand_history'] = [[] for _ in range(len(sku_total_demand))] # Empty list if no history
+    else:
+        sku_summary_df = pd.merge(sku_total_demand, sku_history_list, on=material_col, how='left')
+        # Fill NaN with empty lists for SKUs that might not have history after merge (e.g. only one data point)
+        sku_summary_df['demand_history'] = sku_summary_df['demand_history'].apply(lambda x: x if isinstance(x, list) else [])
+
+    sku_summary_df.rename(columns={material_col: 'SKU', 'total_demand': 'Total Demand'}, inplace=True)
+
+    if sku_summary_df.empty:
+        st.info("No SKU data to display after processing.")
+        return
+
+    # Determine y_max for the line chart dynamically or set a fixed reasonable value
+    max_demand_history = 0
+    if 'demand_history' in sku_summary_df.columns:
+        for history in sku_summary_df['demand_history']:
+            if history:
+                max_demand_history = max(max_demand_history, max(history))
+    y_max_chart = max(10, max_demand_history) # Ensure y_max is at least 10, or use a more sophisticated logic
+
     st.dataframe(
-        sku_summary.style.format({'Total Demand': "{:.2f}"}),
-        use_container_width=True
+        sku_summary_df,
+        column_config={
+            "SKU": st.column_config.TextColumn("SKU Code"),
+            "Total Demand": st.column_config.NumberColumn(
+                "Total Demand",
+                help="Total demand for the SKU over the selected period",
+                format="%.2f"
+            ),
+            "demand_history": st.column_config.LineChartColumn(
+                "Demand Trend (Monthly)", 
+                help="Monthly demand trend for the SKU",
+                y_min=0, 
+                y_max=int(y_max_chart * 1.1) # Add a small buffer to y_max
+            ),
+        },
+        use_container_width=True,
+        hide_index=True
     )
-    st.button("Adjust Stock", help="Initiate stock adjustment for selected SKUs.", key="adjust_stock")
+    
+    #st.button("Adjust Stock", help="Initiate stock adjustment for selected SKUs.", key="adjust_stock_panel")
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_feedback_widget():

@@ -102,6 +102,9 @@ def load_data(data_source: str, uploaded_file=None, connection_string: str = "",
         if data is not None:
             st.session_state.state.data = data
             logger.info(f"Data loaded successfully with {len(data)} rows")
-            st.subheader("Preview of Preprocessed Data")
-            st.dataframe(data.head(5))
+            with st.expander("📊 Preview of Preprocessed Data", expanded=False):
+                st.subheader("Preview of Preprocessed Data")
+                st.dataframe(data.head(5))
+                st.write(f"Total rows: {len(data)}")
+                st.write(f"Columns: {list(data.columns)}")
         return data
