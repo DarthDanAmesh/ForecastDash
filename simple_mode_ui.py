@@ -110,26 +110,24 @@ def show_simple_mode():
         st.error("No data loaded. Please upload a CSV file in the sidebar.", icon="🚨")
         return
 
-    # Detect mobile and render appropriate UI
     is_mobile = detect_mobile()
     
     if is_mobile:
         render_mobile_ui()
-        render_mobile_controls() # This calls render_filters internally, may need adjustment
+        render_mobile_controls()
+        # Optionally, add chatbot for mobile too, might need specific layout
+        # render_chatbot_interface() 
     else:
-        # Desktop layout
         col_main, col_right = st.columns([4, 1])
-        # Sidebar can be used for other things or kept minimal
-        # with st.sidebar:
-        #     render_filters() # Removed from here
         with col_main:
-            render_central_controls() # Filters are now here
+            render_central_controls()
             render_data_table()
             render_forecast_section()
-            render_adjustment_wizard()  # Add wizard to main area
+            render_chatbot_interface() # <<< Added chatbot here
+            render_adjustment_wizard()
         with col_right:
             render_sku_panel()
-            render_feedback_widget()  # Add feedback widget
+            render_feedback_widget()
 
 def render_mobile_controls():
     """Render mobile-specific controls."""
@@ -267,15 +265,14 @@ def render_central_controls():
     }
 
 def render_data_table():
-    """Render data overview in tabs: Monthly Demand, Demand by Country, and Top SKUs."""
-    st.subheader("Data Overview")
+    """Render data overview in tabs with selection: Monthly Demand, Demand by Country, and Top SKUs."""
+    st.subheader("Data Overview (Select rows/columns for context)")
     
     data = filter_data(st.session_state.state.data)
     if data is None or data.empty:
         st.warning("No data matches the selected filters or no data loaded.", icon="⚠️")
         return
 
-    # Ensure required columns exist
     required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['material']]
     if not all(col in data.columns for col in required_cols):
         st.error(f"Data is missing one or more required columns: {', '.join(required_cols)}.", icon="🚨")
@@ -284,11 +281,22 @@ def render_data_table():
     tab1, tab2, tab3 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs"])
 
     with tab1:
-        st.markdown("#### Monthly Demand Overview (5-records preview)")
+        st.markdown("#### Monthly Demand Overview")
         try:
             monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
             monthly_data[STANDARD_COLUMNS['date']] = pd.to_datetime(monthly_data[STANDARD_COLUMNS['date']]).dt.strftime('%Y-%m')
-            st.dataframe(monthly_data.head(5), use_container_width=True)
+            
+            st.dataframe(
+                monthly_data, 
+                use_container_width=True, 
+                key="monthly_demand_df", 
+                on_select="rerun", 
+                selection_mode=["multi-row", "multi-column"]
+            )
+            # Store selection
+            if st.session_state.monthly_demand_df:
+                 st.session_state.data_table_selection = st.session_state.monthly_demand_df.selection
+
         except Exception as e:
             logger.error(f"Error displaying monthly demand table: {str(e)}")
             st.error(f"Failed to display monthly demand: {str(e)}.", icon="🚨")
@@ -298,22 +306,27 @@ def render_data_table():
         if STANDARD_COLUMNS['country'] in data.columns:
             try:
                 country_summary = data.groupby(STANDARD_COLUMNS['country'])[STANDARD_COLUMNS['demand']].sum().reset_index()
-                
-                # Filter for countries in COUNTRY_CODE_MAP and map to full names
                 country_summary = country_summary[country_summary[STANDARD_COLUMNS['country']].isin(COUNTRY_CODE_MAP.keys())]
                 country_summary['country_full_name'] = country_summary[STANDARD_COLUMNS['country']].map(COUNTRY_CODE_MAP)
                 
                 if country_summary.empty:
                     st.info("No data available for specified countries after filtering.")
                 else:
+                    # For plots, selection is not directly applicable in the same way as dataframes
+                    # If you need to select from the data used for the plot, display it as a dataframe too
                     fig = px.bar(
                         country_summary,
-                        x='country_full_name', # Use full name for x-axis
+                        x='country_full_name',
                         y=STANDARD_COLUMNS['demand'],
                         title="Demand by Country (Filtered)",
                         labels={STANDARD_COLUMNS['demand']: 'Total Demand', 'country_full_name': 'Country'}
                     )
                     st.plotly_chart(fig, use_container_width=True)
+                    # Optionally, display the country_summary dataframe for selection
+                    st.dataframe(country_summary, key="country_summary_df", on_select="rerun", selection_mode=["multi-row"])
+                    if st.session_state.country_summary_df:
+                        st.session_state.data_table_selection = st.session_state.country_summary_df.selection
+
             except Exception as e:
                 logger.error(f"Error creating country bar plot: {str(e)}")
                 st.error(f"Failed to create country bar plot: {str(e)}.", icon="🚨")
@@ -324,6 +337,7 @@ def render_data_table():
         st.markdown("#### Top 5 SKUs by Demand")
         try:
             sku_summary = data.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['demand']].sum().nlargest(5).reset_index()
+            # Similar to tab2, if selection is needed from this data, display it as a dataframe
             fig = px.bar(
                 sku_summary,
                 x=STANDARD_COLUMNS['material'],
@@ -332,9 +346,16 @@ def render_data_table():
                 labels={STANDARD_COLUMNS['demand']: 'Total Demand'}
             )
             st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(sku_summary, key="top_skus_df", on_select="rerun", selection_mode=["multi-row"])
+            if st.session_state.top_skus_df:
+                st.session_state.data_table_selection = st.session_state.top_skus_df.selection
+
         except Exception as e:
             logger.error(f"Error creating SKU bar plot: {str(e)}")
             st.error(f"Failed to create SKU bar plot: {str(e)}.", icon="🚨")
+
+    # Display current selection (for debugging or context)
+    # st.write("Current DataFrame Selection:", st.session_state.data_table_selection)
 
 def render_forecast_section():
     """Render forecast generation and visualization section."""
@@ -373,11 +394,11 @@ def render_forecast_section():
                 st.error(f"Failed to generate forecast: {str(e)}.", icon="🚨")
 
 def render_sku_panel():
-    """Render right-side panel with selected SKUs, quantities, and demand history."""
+    """Render right-side panel with selected SKUs, quantities, and demand history, with selection."""
     st.markdown("<div class='sidebar-filter'>", unsafe_allow_html=True)
-    st.subheader("Selected SKUs Overview")
+    st.subheader("Selected SKUs Overview (Select for context)")
     
-    data = filter_data(st.session_state.state.data) # Assumes filter_data is defined and works
+    data = filter_data(st.session_state.state.data) 
     if data is None or data.empty:
         st.info("No SKUs selected or data available for selected filters.", icon="ℹ️")
         return
@@ -390,7 +411,6 @@ def render_sku_panel():
         st.warning("Data is missing required columns (material, demand, or date) for SKU panel.", icon="⚠️")
         return
 
-    # Ensure date column is datetime
     try:
         data[date_col] = pd.to_datetime(data[date_col])
     except Exception as e:
@@ -398,26 +418,19 @@ def render_sku_panel():
         st.warning(f"Could not process date column: {e}", icon="⚠️")
         return
 
-    # Create demand history: group by SKU and month, then list demand values
-    # Resample to monthly frequency. You can change 'ME' (Month End) to 'W' (Weekly) or other frequencies.
     sku_demand_history = data.groupby([
         material_col,
-        pd.Grouper(key=date_col, freq='ME') # Group by SKU and Month End
+        pd.Grouper(key=date_col, freq='ME') 
     ])[demand_col].sum().reset_index()
 
-    # Pivot to get SKUs as rows and monthly demand as a list
     sku_history_list = sku_demand_history.groupby(material_col)[demand_col].apply(list).reset_index(name='demand_history')
-
-    # Get total demand for summary
     sku_total_demand = data.groupby(material_col)[demand_col].sum().reset_index(name='total_demand')
 
-    # Merge total demand with history
     if sku_history_list.empty:
         sku_summary_df = sku_total_demand
-        sku_summary_df['demand_history'] = [[] for _ in range(len(sku_total_demand))] # Empty list if no history
+        sku_summary_df['demand_history'] = [[] for _ in range(len(sku_total_demand))]
     else:
         sku_summary_df = pd.merge(sku_total_demand, sku_history_list, on=material_col, how='left')
-        # Fill NaN with empty lists for SKUs that might not have history after merge (e.g. only one data point)
         sku_summary_df['demand_history'] = sku_summary_df['demand_history'].apply(lambda x: x if isinstance(x, list) else [])
 
     sku_summary_df.rename(columns={material_col: 'SKU', 'total_demand': 'Total Demand'}, inplace=True)
@@ -426,15 +439,15 @@ def render_sku_panel():
         st.info("No SKU data to display after processing.")
         return
 
-    # Determine y_max for the line chart dynamically or set a fixed reasonable value
     max_demand_history = 0
     if 'demand_history' in sku_summary_df.columns:
         for history in sku_summary_df['demand_history']:
             if history:
                 max_demand_history = max(max_demand_history, max(history))
-    y_max_chart = max(10, max_demand_history) # Ensure y_max is at least 10, or use a more sophisticated logic
+    y_max_chart = max(10, max_demand_history)
 
-    st.dataframe(
+    # Make the dataframe selectable
+    event = st.dataframe(
         sku_summary_df,
         column_config={
             "SKU": st.column_config.TextColumn("SKU Code"),
@@ -447,14 +460,25 @@ def render_sku_panel():
                 "Demand Trend (Monthly)", 
                 help="Monthly demand trend for the SKU",
                 y_min=0, 
-                y_max=int(y_max_chart * 1.1) # Add a small buffer to y_max
+                y_max=int(y_max_chart * 1.1)
             ),
         },
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        key="sku_panel_df", # Unique key for this dataframe
+        on_select="rerun",
+        selection_mode=["multi-row"] # Or other modes as needed
     )
     
-    #st.button("Adjust Stock", help="Initiate stock adjustment for selected SKUs.", key="adjust_stock_panel")
+    # Store selection
+    if st.session_state.sku_panel_df:
+        st.session_state.sku_panel_selection = st.session_state.sku_panel_df.selection
+    
+    # Display current selection (for debugging or context)
+    # st.write("Current SKU Panel Selection:", st.session_state.sku_panel_selection)
+
+    # The Adjust Stock button was commented out in your context, restore if needed
+    # st.button("Adjust Stock", help="Initiate stock adjustment for selected SKUs.", key="adjust_stock_panel")
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_feedback_widget():
@@ -560,3 +584,79 @@ def filter_data(data: pd.DataFrame) -> pd.DataFrame:
                 st.warning(f"Could not apply date filter: {e}")
     
     return filtered_data
+
+
+def chat_stream(prompt, selection_context):
+    # Modify this to actually call your LLM with the prompt and selection_context
+    # For now, it's a placeholder that includes the selection
+    context_str = "No selection." 
+    if selection_context and (selection_context.get('rows') or selection_context.get('columns')):
+        context_str = f"Selected context: Rows {selection_context.get('rows')}, Columns {selection_context.get('columns')}."
+    
+    response = f'You said, "{prompt}". {context_str} ...interesting.'
+    for char in response:
+        yield char
+        time.sleep(0.02)
+
+def save_feedback(index):
+    # Check if the feedback key exists before accessing
+    feedback_key = f"feedback_{index}"
+    if feedback_key in st.session_state:
+        st.session_state.history[index]["feedback"] = st.session_state[feedback_key]
+    else:
+        logger.warning(f"Feedback key {feedback_key} not found in session_state during save_feedback.")
+
+def render_chatbot_interface():
+    st.subheader("💬 Chat with AI Assistant")
+
+    if "history" not in st.session_state:
+        st.session_state.history = []
+
+    for i, message in enumerate(st.session_state.history):
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+            if message["role"] == "assistant":
+                feedback = message.get("feedback", None)
+                # Ensure feedback key is initialized for current message if not present
+                feedback_session_key = f"feedback_{i}"
+                if feedback_session_key not in st.session_state:
+                    st.session_state[feedback_session_key] = feedback
+                
+                st.feedback(
+                    type="thumbs", # Corrected parameter name
+                    key=feedback_session_key, # Use the initialized session key
+                    # disabled=feedback is not None, # This might cause issues if feedback is None initially
+                    on_change=save_feedback,
+                    args=[i],
+                    optional_text_label="Provide additional feedback"
+                )
+
+    # Consolidate selection context from different dataframes
+    # You might want a more sophisticated way to manage which selection is active context
+    active_selection_context = None
+    if st.session_state.get('sku_panel_selection') and (st.session_state.sku_panel_selection.get('rows') or st.session_state.sku_panel_selection.get('columns')):
+        active_selection_context = st.session_state.sku_panel_selection
+    elif st.session_state.get('data_table_selection') and (st.session_state.data_table_selection.get('rows') or st.session_state.data_table_selection.get('columns')):
+        active_selection_context = st.session_state.data_table_selection
+
+    if prompt := st.chat_input("Ask about the data or forecast..."):
+        with st.chat_message("user"):
+            st.write(prompt)
+        st.session_state.history.append({"role": "user", "content": prompt})
+        
+        with st.chat_message("assistant"):
+            # Pass the active selection to the chat_stream
+            response_content = st.write_stream(chat_stream(prompt, active_selection_context))
+            
+            # For feedback on the new message
+            new_message_index = len(st.session_state.history)
+            feedback_key_new = f"feedback_{new_message_index}"
+            st.session_state[feedback_key_new] = None # Initialize feedback for new message
+            st.feedback(
+                type="thumbs", # Corrected parameter name
+                key=feedback_key_new,
+                on_change=save_feedback,
+                args=[new_message_index], # Index for the new assistant message
+                optional_text_label="Provide additional feedback"
+            )
+        st.session_state.history.append({"role": "assistant", "content": response_content, "feedback": None})
