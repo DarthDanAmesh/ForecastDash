@@ -115,14 +115,15 @@ def show_simple_mode():
     
     if is_mobile:
         render_mobile_ui()
-        render_mobile_controls()
+        render_mobile_controls() # This calls render_filters internally, may need adjustment
     else:
         # Desktop layout
         col_main, col_right = st.columns([4, 1])
-        with st.sidebar:
-            render_filters()
+        # Sidebar can be used for other things or kept minimal
+        # with st.sidebar:
+        #     render_filters() # Removed from here
         with col_main:
-            render_central_controls()
+            render_central_controls() # Filters are now here
             render_data_table()
             render_forecast_section()
             render_adjustment_wizard()  # Add wizard to main area
@@ -136,23 +137,23 @@ def render_mobile_controls():
     
     # Mobile-friendly filters
     with st.expander("🔍 Filters", expanded=False):
-        render_filters()
+        render_filters() # render_filters is still used here for mobile
     
     # Mobile forecast section
     with st.expander("📈 Forecast", expanded=True):
         render_forecast_section()
 
-def render_filters():
-    """Render sidebar filters for material and country."""
-    st.markdown("<div class='sidebar-filter'>", unsafe_allow_html=True)
-    st.subheader("Filters")
+def render_filters(): # This function is now primarily for mobile or can be inlined if only used once
+    """Render filters for material and country."""
+    # st.markdown("<div class='sidebar-filter'>", unsafe_allow_html=True) # Context might change
+    # st.subheader("Filters") # Subheader might be redundant if called within render_central_controls
     
     data = st.session_state.state.data
     material_col = STANDARD_COLUMNS['material']
     country_col = STANDARD_COLUMNS['country']
     
-    material_options = ['All'] + sorted(data[material_col].unique().tolist()) if material_col in data.columns else ['All']
-    country_options = ['All'] + sorted(data[country_col].unique().tolist()) if country_col in data.columns else ['All']
+    material_options = ['All'] + sorted(data[material_col].unique().tolist()) if material_col in data.columns and data is not None else ['All']
+    country_options = ['All'] + sorted(data[country_col].unique().tolist()) if country_col in data.columns and data is not None else ['All']
     
     selected_materials = st.multiselect(
         "Select SKUs/Materials",
@@ -170,49 +171,100 @@ def render_filters():
     )
     
     if 'All' in selected_materials:
-        selected_materials = material_options[1:]
+        selected_materials = material_options[1:] if len(material_options) > 1 else []
     if 'All' in selected_countries:
-        selected_countries = country_options[1:]
+        selected_countries = country_options[1:] if len(country_options) > 1 else []
     
     st.session_state.filters = {
         'materials': selected_materials,
         'countries': selected_countries
     }
-    st.markdown("</div>", unsafe_allow_html=True)
+    # st.markdown("</div>", unsafe_allow_html=True)
 
 def render_central_controls():
-    """Render date range selector and forecast freeze."""
+    """Render date range selector, forecast freeze, and data filters."""
     st.subheader("Demand Planning Controls")
     data = st.session_state.state.data
     date_col = STANDARD_COLUMNS['date']
     
-    if data is None or date_col not in data.columns:
-        st.error("Dataset missing date column. Please upload a valid file.", icon="🚨")
+    if data is None:
+        st.error("Dataset not loaded. Please upload a valid file.", icon="🚨")
         return
-    
+
+    # --- Date Range and Freeze Forecast --- 
     col1, col2 = st.columns(2)
-    
     with col1:
-        try:
-            min_date = pd.to_datetime(data[date_col]).min()
-            max_date = pd.to_datetime(data[date_col]).max()
-            st.date_input(
-                "Select Date Range",
-                value=(min_date, max_date),
-                help="Choose the time period for analysis.",
-                key="date_range"
-            )
-        except Exception as e:
-            st.error(f"Invalid date column: {str(e)}.", icon="🚨")
-            return
+        if date_col not in data.columns:
+            st.error(f"Dataset missing date column: '{date_col}'. Please upload a valid file.", icon="🚨")
+        else:
+            try:
+                min_date = pd.to_datetime(data[date_col]).min()
+                max_date = pd.to_datetime(data[date_col]).max()
+                st.date_input(
+                    "Select Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date,
+                    help="Choose the time period for analysis.",
+                    key="date_range"
+                )
+            except Exception as e:
+                st.error(f"Invalid date column or data: {str(e)}.", icon="🚨")
     
     with col2:
         st.checkbox(
             "Freeze Forecast",
-            value=False,
+            value=st.session_state.get('freeze_forecast', False), # Ensure key exists
             help="Lock the forecast to prevent updates until unfrozen.",
             key="freeze_forecast"
         )
+    
+    st.markdown("---_Filters_---") # Separator for filters
+
+    # --- Material and Country Filters (moved from render_filters) ---
+    material_col = STANDARD_COLUMNS['material']
+    country_col = STANDARD_COLUMNS['country']
+    
+    # Use columns for better layout of filters
+    filter_col1, filter_col2 = st.columns(2)
+
+    with filter_col1:
+        material_options = ['All'] + sorted(data[material_col].unique().tolist()) if material_col in data.columns and not data[material_col].empty else ['All']
+        selected_materials = st.multiselect(
+            "Select SKUs/Materials",
+            material_options,
+            default=['All'] if 'All' in material_options else material_options[1:] if len(material_options) > 1 else [],
+            help="Filter by product SKU or material code.",
+            key="material_filter_central"
+        )
+
+    with filter_col2:
+        country_options = ['All'] + sorted(data[country_col].unique().tolist()) if country_col in data.columns and not data[country_col].empty else ['All']
+        selected_countries = st.multiselect(
+            "Select Countries",
+            country_options,
+            default=['All'] if 'All' in country_options else country_options[1:] if len(country_options) > 1 else [],
+            help="Filter by country or location.",
+            key="country_filter_central"
+        )
+    
+    # Update session state filters (ensure keys are consistent or update logic in filter_data)
+    processed_materials = []
+    if 'All' in selected_materials:
+        processed_materials = material_options[1:] if len(material_options) > 1 else []
+    else:
+        processed_materials = selected_materials
+
+    processed_countries = []
+    if 'All' in selected_countries:
+        processed_countries = country_options[1:] if len(country_options) > 1 else []
+    else:
+        processed_countries = selected_countries
+
+    st.session_state.filters = {
+        'materials': processed_materials,
+        'countries': processed_countries
+    }
 
 def render_data_table():
     """Render data overview in tabs: Monthly Demand, Demand by Country, and Top SKUs."""
@@ -232,11 +284,11 @@ def render_data_table():
     tab1, tab2, tab3 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs"])
 
     with tab1:
-        st.markdown("#### Monthly Demand Overview")
+        st.markdown("#### Monthly Demand Overview (5-records preview)")
         try:
             monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
             monthly_data[STANDARD_COLUMNS['date']] = pd.to_datetime(monthly_data[STANDARD_COLUMNS['date']]).dt.strftime('%Y-%m')
-            st.dataframe(monthly_data, use_container_width=True)
+            st.dataframe(monthly_data.head(5), use_container_width=True)
         except Exception as e:
             logger.error(f"Error displaying monthly demand table: {str(e)}")
             st.error(f"Failed to display monthly demand: {str(e)}.", icon="🚨")
@@ -407,25 +459,43 @@ def filter_data(data: pd.DataFrame) -> pd.DataFrame:
     if data is None:
         return pd.DataFrame()
         
-    filters = st.session_state.get('filters', {'materials': [], 'countries': []})
+    # Ensure filters key exists in session_state, default to empty lists if not
+    filters_state = st.session_state.get('filters', {'materials': [], 'countries': []})
+    
     filtered_data = data.copy()
     
     # Apply material filter
-    if filters['materials']:
-        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(filters['materials'])]
+    # Use .get on filters_state to avoid KeyError if 'materials' is missing
+    materials_to_filter = filters_state.get('materials', [])
+    if materials_to_filter and STANDARD_COLUMNS['material'] in filtered_data.columns:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(materials_to_filter)]
     
     # Apply country filter
-    if filters['countries']:
-        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(filters['countries'])]
+    countries_to_filter = filters_state.get('countries', [])
+    if countries_to_filter and STANDARD_COLUMNS['country'] in filtered_data.columns:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(countries_to_filter)]
     
     # Apply date range filter
     if 'date_range' in st.session_state and st.session_state.date_range:
         date_range = st.session_state.date_range
-        if len(date_range) == 2:
+        if len(date_range) == 2 and STANDARD_COLUMNS['date'] in filtered_data.columns:
             start_date, end_date = date_range
-            filtered_data = filtered_data[
-                (pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']]) >= pd.to_datetime(start_date)) &
-                (pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']]) <= pd.to_datetime(end_date))
-            ]
+            try:
+                # Ensure dates are timezone-naive for comparison if data is timezone-naive
+                data_dates = pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']])
+                start_date_dt = pd.to_datetime(start_date)
+                end_date_dt = pd.to_datetime(end_date)
+
+                if data_dates.dt.tz is not None:
+                    start_date_dt = start_date_dt.tz_localize(data_dates.dt.tz) if start_date_dt.tz is None else start_date_dt.tz_convert(data_dates.dt.tz)
+                    end_date_dt = end_date_dt.tz_localize(data_dates.dt.tz) if end_date_dt.tz is None else end_date_dt.tz_convert(data_dates.dt.tz)
+                
+                filtered_data = filtered_data[
+                    (data_dates >= start_date_dt) &
+                    (data_dates <= end_date_dt)
+                ]
+            except Exception as e:
+                logger.error(f"Error applying date filter: {e}")
+                st.warning(f"Could not apply date filter: {e}")
     
     return filtered_data
