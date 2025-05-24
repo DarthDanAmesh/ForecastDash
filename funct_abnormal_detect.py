@@ -14,13 +14,32 @@ logger = logging.getLogger(__name__)
 @st.cache_data(show_spinner=False)
 def detect_sales_anomalies(df: pd.DataFrame, window: int = 3, sigma: float = 2.0) -> Optional[pd.DataFrame]:
     """Detect SKU-level anomalies in demand data."""
-    logger.info(f"Detecting anomalies with window={window}, sigma={sigma}")
+    logger.info(f"Detecting anomalies with window={window}, sigma={sigma})")
     
     if df.empty:
         st.error("Input DataFrame is empty.", icon="🚨")
         logger.error("Empty input DataFrame")
         return None
     
+    # Check if the DataFrame is pivoted (material codes as columns, date as index)
+    # This typically happens if prepare_time_series was called with a material column
+    is_pivoted = not all(col in df.columns for col in [STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['material']]) and df.index.name == STANDARD_COLUMNS['date']
+
+    if is_pivoted:
+        logger.info("Input DataFrame appears to be pivoted. Unpivoting...")
+        try:
+            df_unpivoted = df.reset_index().melt(
+                id_vars=[STANDARD_COLUMNS['date']], 
+                var_name=STANDARD_COLUMNS['material'], 
+                value_name=STANDARD_COLUMNS['demand']
+            )
+            df = df_unpivoted
+            logger.info(f"Unpivoted DataFrame columns: {df.columns.tolist()}")
+        except Exception as e:
+            st.error(f"Failed to unpivot DataFrame: {str(e)}", icon="🚨")
+            logger.error(f"Error unpivoting DataFrame: {str(e)}. Columns were: {df.columns.tolist()}, Index name: {df.index.name}")
+            return None
+
     required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['material']]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:

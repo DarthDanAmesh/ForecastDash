@@ -24,10 +24,15 @@ class ModelTrainer:
                 'n_estimators': 100,
                 'max_depth': 6,
                 'learning_rate': 0.1,
-                'random_state': 42
+                'random_state': 42,
+                'enable_categorical': True
             }
             if params:
                 default_params.update(params)
+            
+            X_train_processed = X_train.copy()
+            for col in X_train.select_dtypes(include=['object']).columns:
+                X_train_processed[col] = X_train_processed[col].astype('category')
             
             model = XGBRegressor(**default_params)
             model.fit(X_train, y_train)

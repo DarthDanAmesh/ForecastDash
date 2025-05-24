@@ -74,12 +74,13 @@ class DeepARModel:
                 return None
 
             # Create training dataset
+            # In the create_dataset method, modify the TimeSeriesDataSet initialization
             training_dataset = TimeSeriesDataSet(
                 train_data,
                 time_idx=self.time_idx,
                 target=self.target,
                 group_ids=self.group_ids,
-                categorical_encoders={STANDARD_COLUMNS['material']: NaNLabelEncoder().fit(df[STANDARD_COLUMNS['material']])},
+                categorical_encoders={STANDARD_COLUMNS['material']: NaNLabelEncoder(add_nan=True).fit(df[STANDARD_COLUMNS['material']])},
                 min_encoder_length=2,
                 max_encoder_length=MAX_ENCODER_LENGTH,
                 max_prediction_length=self.prediction_length,

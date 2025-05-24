@@ -184,31 +184,60 @@ def render_sidebar():
         )
         st.session_state.mode = mode
 
-        show_data_source_selection()
+        show_data_source_selection() # This function should update st.session_state.state.uploaded_file
 
-        if st.button("Load Data", type="primary", help="Upload and process your demand data"):
-            with st.spinner("Loading and processing data..."):
-                data = cached_load_data(
-                    st.session_state.state.data_source,
-                    getattr(st.session_state.state, "uploaded_file", None),
-                    getattr(st.session_state.state, "connection_string", ""),
-                    getattr(st.session_state.state, "api_config", {})
-                )
-                if data is not None:
-                    processed_data = DataProcessor.preprocess_data(data)
-                    if processed_data is not None:
-                        st.session_state.state.data = cached_feature_engineering(processed_data)
-                        st.success("Data loaded and processed successfully!", icon="✅")
+        # Conditionally display the "Load Data" button
+        if st.session_state.state.data_source == "csv":
+            if hasattr(st.session_state.state, "uploaded_file") and st.session_state.state.uploaded_file is not None:
+                if st.button("Load Data", type="primary", help="Upload and process your demand data"):
+                    with st.spinner("Loading and processing data..."):
+                        data = cached_load_data(
+                            st.session_state.state.data_source,
+                            st.session_state.state.uploaded_file,
+                            getattr(st.session_state.state, "connection_string", ""),
+                            getattr(st.session_state.state, "api_config", {})
+                        )
+                        if data is not None:
+                            processed_data = DataProcessor.preprocess_data(data)
+                            if processed_data is not None:
+                                st.session_state.state.data = cached_feature_engineering(processed_data)
+                                st.success("Data loaded and processed successfully!", icon="✅")
+                            else:
+                                st.error(
+                                    "Data preprocessing failed. Check column requirements and file format.", 
+                                    icon="🚨"
+                                )
+                        else:
+                            st.error(
+                                "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
+                                icon="🚨"
+                            )
+            else:
+                st.info("Please upload a CSV file to enable data loading.") # Optional: Inform user
+        else: # For other data sources, show the button directly
+            if st.button("Load Data", type="primary", help="Upload and process your demand data"):
+                with st.spinner("Loading and processing data..."):
+                    data = cached_load_data(
+                        st.session_state.state.data_source,
+                        getattr(st.session_state.state, "uploaded_file", None),
+                        getattr(st.session_state.state, "connection_string", ""),
+                        getattr(st.session_state.state, "api_config", {})
+                    )
+                    if data is not None:
+                        processed_data = DataProcessor.preprocess_data(data)
+                        if processed_data is not None:
+                            st.session_state.state.data = cached_feature_engineering(processed_data)
+                            st.success("Data loaded and processed successfully!", icon="✅")
+                        else:
+                            st.error(
+                                "Data preprocessing failed. Check column requirements and file format.", 
+                                icon="🚨"
+                            )
                     else:
                         st.error(
-                            "Data preprocessing failed. Check column requirements and file format.", 
+                            "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
                             icon="🚨"
                         )
-                else:
-                    st.error(
-                        "Failed to load data. Ensure the file is CSV/Excel with required columns.", 
-                        icon="🚨"
-                    )
 
 # Technical Mode dashboard
 def show_technical_mode():
