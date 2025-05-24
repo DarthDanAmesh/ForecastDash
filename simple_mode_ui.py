@@ -9,6 +9,7 @@ from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH
 from simple_mode_utils import render_adjustment_wizard
 import streamlit.components.v1 as components
 import logging
+import plotly.express as px
 
 logger = logging.getLogger(__name__)
 
@@ -213,17 +214,66 @@ def render_central_controls():
         )
 
 def render_data_table():
-    """Render monthly demand table."""
-    st.subheader("Monthly Demand Overview")
+    """Render data overview in tabs: Monthly Demand, Demand by Country, and Top SKUs."""
+    st.subheader("Data Overview")
+    
     data = filter_data(st.session_state.state.data)
-    if data.empty:
-        st.warning("No data matches the selected filters.", icon="⚠️")
+    if data is None or data.empty:
+        st.warning("No data matches the selected filters or no data loaded.", icon="⚠️")
         return
-    
-    monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
-    monthly_data[STANDARD_COLUMNS['date']] = monthly_data[STANDARD_COLUMNS['date']].dt.strftime('%Y-%m')
-    
-    st.dataframe(monthly_data, use_container_width=True)
+
+    # Ensure required columns exist
+    required_cols = [STANDARD_COLUMNS['date'], STANDARD_COLUMNS['demand'], STANDARD_COLUMNS['material']]
+    if not all(col in data.columns for col in required_cols):
+        st.error(f"Data is missing one or more required columns: {', '.join(required_cols)}.", icon="🚨")
+        return
+
+    tab1, tab2, tab3 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs"])
+
+    with tab1:
+        st.markdown("#### Monthly Demand Overview")
+        try:
+            monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
+            monthly_data[STANDARD_COLUMNS['date']] = pd.to_datetime(monthly_data[STANDARD_COLUMNS['date']]).dt.strftime('%Y-%m')
+            st.dataframe(monthly_data, use_container_width=True)
+        except Exception as e:
+            logger.error(f"Error displaying monthly demand table: {str(e)}")
+            st.error(f"Failed to display monthly demand: {str(e)}.", icon="🚨")
+
+    with tab2:
+        st.markdown("#### Demand by Country")
+        if STANDARD_COLUMNS['country'] in data.columns:
+            try:
+                country_summary = data.groupby(STANDARD_COLUMNS['country'])[STANDARD_COLUMNS['demand']].sum().reset_index()
+                fig = px.bar(
+                    country_summary,
+                    x=STANDARD_COLUMNS['country'],
+                    y=STANDARD_COLUMNS['demand'],
+                    title="Demand by Country",
+                    labels={STANDARD_COLUMNS['demand']: 'Total Demand'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                logger.error(f"Error creating country bar plot: {str(e)}")
+                st.error(f"Failed to create country bar plot: {str(e)}.", icon="🚨")
+        else:
+            st.info("Country data is not available in the dataset.")
+
+    with tab3:
+        st.markdown("#### Top 5 SKUs by Demand")
+        try:
+            sku_summary = data.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['demand']].sum().nlargest(5).reset_index()
+            fig = px.bar(
+                sku_summary,
+                x=STANDARD_COLUMNS['material'],
+                y=STANDARD_COLUMNS['demand'],
+                title="Top 5 SKUs by Demand",
+                labels={STANDARD_COLUMNS['demand']: 'Total Demand'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            logger.error(f"Error creating SKU bar plot: {str(e)}")
+            st.error(f"Failed to create SKU bar plot: {str(e)}.", icon="🚨")
 
 def render_forecast_section():
     """Render forecast generation and visualization section."""
