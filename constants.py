@@ -26,8 +26,8 @@ COLUMN_ALIASES = {
 }
 
 # Global settings
-DEFAULT_FREQ = 'W'  # Weekly frequency, aligned with test.py
-DEFAULT_PREDICTION_LENGTH = 2  # Number of forecast steps, aligned with test.py
+DEFAULT_FREQ = 'ME'  # Weekly frequency, aligned with test.py
+DEFAULT_PREDICTION_LENGTH = 6  # Number of forecast steps, aligned with test.py
 MIN_OBSERVATIONS_PER_MATERIAL = 8  # Minimum data points per material
 MAX_ENCODER_LENGTH = 6  # DeepAR context window
 BATCH_SIZE = 32  # Training batch size

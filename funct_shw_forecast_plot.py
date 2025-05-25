@@ -27,7 +27,7 @@ def display_forecast(data: pd.DataFrame, forecast: pd.DataFrame) -> None:
     if missing_cols:
         st.warning(f"Missing columns in forecast: {', '.join(missing_cols)}. Displaying aggregate forecast.", icon="⚠️")
         materials = ['All']
-        material_historical = historical = data.groupby([STANDARD_COLUMNS['date']])[STANDARD_COLUMNS['demand']].sum().reset_index()
+        material_historical = data.groupby([STANDARD_COLUMNS['date']])[STANDARD_COLUMNS['demand']].sum().reset_index()
         material_forecast = forecast
     else:
         # Aggregate historical data by material
@@ -35,6 +35,12 @@ def display_forecast(data: pd.DataFrame, forecast: pd.DataFrame) -> None:
         materials = forecast[material_col].unique()
     
     fig = go.Figure()
+    
+    # Determine the date range for the x-axis
+    historical_dates = pd.to_datetime(historical[STANDARD_COLUMNS['date']])
+    forecast_dates = pd.to_datetime(forecast['date'])
+    min_date = min(historical_dates.min(), forecast_dates.min())
+    max_date = forecast_dates.max()  # Forecast should extend 6 months from end of historical data
     
     for material in materials:
         if material == 'All':
@@ -80,7 +86,10 @@ def display_forecast(data: pd.DataFrame, forecast: pd.DataFrame) -> None:
         yaxis_title="Demand",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(t=70, b=30, l=30, r=30)
+        margin=dict(t=70, b=30, l=30, r=30),
+        xaxis=dict(
+            range=[min_date, max_date + pd.offsets.MonthEnd(1)]  # Extend slightly beyond max forecast date
+        )
     )
     st.plotly_chart(fig, use_container_width=True)
 

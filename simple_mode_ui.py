@@ -7,7 +7,8 @@ from typing import Optional, Dict, Any
 from cls_data_preprocessor import DataProcessor
 from forecast_engine import ForecastEngine
 from funct_shw_forecast_plot import display_forecast
-from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, COUNTRY_CODE_MAP
+from renders_for_simple_mode_ui import render_mobile_ui, render_mobile_controls, detect_mobile
+from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, COUNTRY_CODE_MAP, MAX_ENCODER_LENGTH, DEFAULT_FORECAST_PERIOD, DEFAULT_FREQ
 from simple_mode_utils import render_adjustment_wizard
 import streamlit.components.v1 as components
 import logging
@@ -17,95 +18,7 @@ import json
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-def detect_mobile():
-    """Detect if user is on mobile device."""
-    # Simple mobile detection using viewport width
-    mobile_js = """
-    <script>
-    function isMobile() {
-        return window.innerWidth <= 768;
-    }
-    parent.window.postMessage({type: 'mobile', isMobile: isMobile()}, '*');
-    </script>
-    """
-    components.html(mobile_js, height=0)
-    return st.session_state.get('is_mobile', False)
 
-def render_mobile_ui():
-    """Render mobile-optimized interface."""
-    components.html("""
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <style>
-    .mobile-card {
-        margin-bottom: 1rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    .mobile-btn {
-        width: 100%;
-        padding: 12px;
-        font-size: 16px;
-        border-radius: 8px;
-        margin-bottom: 8px;
-    }
-    .swipe-container {
-        overflow-x: auto;
-        white-space: nowrap;
-        padding: 10px 0;
-    }
-    .swipe-item {
-        display: inline-block;
-        width: 280px;
-        margin-right: 15px;
-        vertical-align: top;
-        white-space: normal;
-    }
-    </style>
-    <div class="container-fluid">
-        <div class="row">
-            <div class="col-12">
-                <h3 class="text-center mb-4">📱 My Forecasts</h3>
-                <div class="swipe-container">
-                    <div class="swipe-item">
-                        <div class="card mobile-card">
-                            <div class="card-body text-center">
-                                <h5 class="card-title">Quick Forecast</h5>
-                                <p class="card-text">Generate instant demand forecast</p>
-                                <button class="btn btn-primary mobile-btn" onclick="parent.window.postMessage({type: 'action', action: 'generate_forecast'}, '*')">Generate</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="swipe-item">
-                        <div class="card mobile-card">
-                            <div class="card-body text-center">
-                                <h5 class="card-title">Adjust Forecast</h5>
-                                <p class="card-text">Fine-tune predictions</p>
-                                <button class="btn btn-warning mobile-btn" onclick="parent.window.postMessage({type: 'action', action: 'adjust_forecast'}, '*')">Adjust</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="swipe-item">
-                        <div class="card mobile-card">
-                            <div class="card-body text-center">
-                                <h5 class="card-title">View KPIs</h5>
-                                <p class="card-text">Check performance metrics</p>
-                                <button class="btn btn-info mobile-btn" onclick="parent.window.postMessage({type: 'action', action: 'view_kpis'}, '*')">View</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script>
-    window.addEventListener('message', function(event) {
-        if (event.data.type === 'action') {
-            // Handle mobile actions
-            console.log('Mobile action:', event.data.action);
-        }
-    });
-    </script>
-    """, height=300)
 
 def show_simple_mode():
     """Render Simple Mode UI for non-technical users."""
@@ -131,17 +44,6 @@ def show_simple_mode():
             #render_sku_panel()
             render_chatbot_interface()
 
-def render_mobile_controls():
-    """Render mobile-specific controls."""
-    st.markdown("### 📊 Quick Controls")
-    
-    # Mobile-friendly filters
-    with st.expander("🔍 Filters", expanded=False):
-        render_filters() # render_filters is still used here for mobile
-    
-    # Mobile forecast section
-    with st.expander("📈 Forecast", expanded=True):
-        render_forecast_section()
 
 def render_filters(): # This function is now primarily for mobile or can be inlined if only used once
     """Render filters for material and country."""
@@ -180,6 +82,51 @@ def render_filters(): # This function is now primarily for mobile or can be inli
         'countries': selected_countries
     }
     # st.markdown("</div>", unsafe_allow_html=True)
+
+
+def filter_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Apply filters to data based on session state."""
+    if data is None:
+        return pd.DataFrame()
+        
+    filters_state = st.session_state.get('filters', {'materials': [], 'countries': []})
+    filtered_data = data.copy()
+    
+    # Apply material filter
+    materials_to_filter = filters_state.get('materials', [])
+    if materials_to_filter and STANDARD_COLUMNS['material'] in filtered_data.columns:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(materials_to_filter)]
+    
+    # Apply country filter
+    countries_to_filter = filters_state.get('countries', [])
+    if countries_to_filter and STANDARD_COLUMNS['country'] in filtered_data.columns:
+        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(countries_to_filter)]
+    
+    # Apply date range filter, ensuring enough historical data
+    if 'date_range' in st.session_state and st.session_state.date_range:
+        date_range = st.session_state.date_range
+        if len(date_range) == 2 and STANDARD_COLUMNS['date'] in filtered_data.columns:
+            start_date, end_date = date_range
+            try:
+                data_dates = pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']])
+                start_date_dt = pd.to_datetime(start_date)
+                end_date_dt = pd.to_datetime(end_date)
+
+                if data_dates.dt.tz is not None:
+                    start_date_dt = start_date_dt.tz_localize(data_dates.dt.tz) if start_date_dt.tz is None else start_date_dt.tz_convert(data_dates.dt.tz)
+                    end_date_dt = end_date_dt.tz_localize(data_dates.dt.tz) if end_date_dt.tz is None else end_date_dt.tz_convert(data_dates.dt.tz)
+                
+                # Extend start_date backward to include context for forecasting
+                context_start_date = start_date_dt - pd.offsets.MonthBegin(MAX_ENCODER_LENGTH)
+                filtered_data = filtered_data[
+                    (data_dates >= context_start_date) &
+                    (data_dates <= end_date_dt)
+                ]
+            except Exception as e:
+                logger.error(f"Error applying date filter: {e}")
+                st.warning(f"Could not apply date filter: {e}")
+    
+    return filtered_data
 
 def render_central_controls():
     """Render date range selector, forecast freeze, and data filters."""
@@ -464,6 +411,7 @@ def render_data_table():
     # Display current selection (for debugging or context)
     # st.write("Current DataFrame Selection:", st.session_state.get('data_table_selection'))
 
+
 def render_forecast_section():
     """Render forecast generation and visualization section."""
     st.subheader("Demand Forecast")
@@ -482,15 +430,28 @@ def render_forecast_section():
                 st.error("No data after filtering. Adjust filters.", icon="🚨")
                 return
             try:
-                forecast_result = ForecastEngine.forecast(data, forecast_horizon=DEFAULT_PREDICTION_LENGTH)
+                # Get the end date from the filtered data or date range
+                date_col = STANDARD_COLUMNS['date']
+                data[date_col] = pd.to_datetime(data[date_col])
+                if 'date_range' in st.session_state and st.session_state.date_range and len(st.session_state.date_range) == 2:
+                    end_date = pd.to_datetime(st.session_state.date_range[1])
+                else:
+                    end_date = data[date_col].max()
+
+                # Generate forecast for 6 months
+                forecast_result = ForecastEngine.forecast(data, forecast_horizon=DEFAULT_FORECAST_PERIOD, freq=DEFAULT_FREQ)
                 if forecast_result is None:
                     st.error("Failed to generate forecast.", icon="🚨")
                     return
-                # Extract the forecast DataFrame from the result dictionary
                 forecast_df = forecast_result['forecast']
                 if forecast_df is None or forecast_df.empty:
                     st.error("Generated forecast is empty.", icon="🚨")
                     return
+                
+                # Ensure forecast dates are monthly and start after end_date
+                forecast_df['date'] = pd.to_datetime(forecast_df['date'])
+                forecast_df = forecast_df[forecast_df['date'] > end_date]
+                
                 st.session_state.state.forecasts["DeepAR"] = forecast_df
                 st.session_state.forecast_generated = True
                 logger.info(f"Forecast DataFrame columns: {list(forecast_df.columns)}")
@@ -645,52 +606,6 @@ def collect_feedback(user_id: str, forecast_id: str, feedback_type: str, sku: Op
     # Notify data scientists (in a real implementation, this would send an alert)
     if len(st.session_state.feedback) % 5 == 0:  # Every 5th feedback
         st.info(f"📊 {len(st.session_state.feedback)} feedback entries collected. Data scientists have been notified.", icon="📈")
-
-def filter_data(data: pd.DataFrame) -> pd.DataFrame:
-    """Apply filters to data based on session state."""
-    if data is None:
-        return pd.DataFrame()
-        
-    # Ensure filters key exists in session_state, default to empty lists if not
-    filters_state = st.session_state.get('filters', {'materials': [], 'countries': []})
-    
-    filtered_data = data.copy()
-    
-    # Apply material filter
-    # Use .get on filters_state to avoid KeyError if 'materials' is missing
-    materials_to_filter = filters_state.get('materials', [])
-    if materials_to_filter and STANDARD_COLUMNS['material'] in filtered_data.columns:
-        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['material']].isin(materials_to_filter)]
-    
-    # Apply country filter
-    countries_to_filter = filters_state.get('countries', [])
-    if countries_to_filter and STANDARD_COLUMNS['country'] in filtered_data.columns:
-        filtered_data = filtered_data[filtered_data[STANDARD_COLUMNS['country']].isin(countries_to_filter)]
-    
-    # Apply date range filter
-    if 'date_range' in st.session_state and st.session_state.date_range:
-        date_range = st.session_state.date_range
-        if len(date_range) == 2 and STANDARD_COLUMNS['date'] in filtered_data.columns:
-            start_date, end_date = date_range
-            try:
-                # Ensure dates are timezone-naive for comparison if data is timezone-naive
-                data_dates = pd.to_datetime(filtered_data[STANDARD_COLUMNS['date']])
-                start_date_dt = pd.to_datetime(start_date)
-                end_date_dt = pd.to_datetime(end_date)
-
-                if data_dates.dt.tz is not None:
-                    start_date_dt = start_date_dt.tz_localize(data_dates.dt.tz) if start_date_dt.tz is None else start_date_dt.tz_convert(data_dates.dt.tz)
-                    end_date_dt = end_date_dt.tz_localize(data_dates.dt.tz) if end_date_dt.tz is None else end_date_dt.tz_convert(data_dates.dt.tz)
-                
-                filtered_data = filtered_data[
-                    (data_dates >= start_date_dt) &
-                    (data_dates <= end_date_dt)
-                ]
-            except Exception as e:
-                logger.error(f"Error applying date filter: {e}")
-                st.warning(f"Could not apply date filter: {e}")
-    
-    return filtered_data
 
 
 def chat_stream(prompt: str, selection_context: Dict[str, Any]):

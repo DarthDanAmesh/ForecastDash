@@ -35,7 +35,7 @@ class ModelTrainer:
                 X_train_processed[col] = X_train_processed[col].astype('category')
             
             model = XGBRegressor(**default_params)
-            model.fit(X_train, y_train)
+            model.fit(X_train_processed, y_train)  # Use the processed data with categorical columns
             logger.info("XGBoost model trained successfully")
             return model
         except Exception as e:

@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Dict, Any
 import logging
-from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, MAX_ENCODER_LENGTH, BATCH_SIZE, MAX_EPOCHS
+from constants import STANDARD_COLUMNS, DEFAULT_PREDICTION_LENGTH, MAX_ENCODER_LENGTH, BATCH_SIZE, MAX_EPOCHS, DEFAULT_FORECAST_PERIOD
 from pytorch_forecasting import TimeSeriesDataSet, DeepAR
 from pytorch_forecasting.data import NaNLabelEncoder
 from pytorch_forecasting.metrics import NormalDistributionLoss
@@ -24,21 +24,38 @@ class DeepARModel:
         self.training_dataset = None
         self.validation_dataset = None
         self.params = params or {}
-        self.prediction_length = self.params.get('prediction_length', DEFAULT_PREDICTION_LENGTH)
+        self.prediction_length = self.params.get('prediction_length', DEFAULT_FORECAST_PERIOD)
         self.batch_size = self.params.get('batch_size', BATCH_SIZE)
         self.max_epochs = self.params.get('max_epochs', max_epochs)
         self.time_idx = 'time_idx'
         self.target = STANDARD_COLUMNS['demand']
         self.group_ids = [STANDARD_COLUMNS['material']]
         self.static_categoricals = [STANDARD_COLUMNS['material'], STANDARD_COLUMNS['country']]
-        self.time_varying_known_reals = ['month', 'quarter', 'day_of_week', 'delivery_delay']
+        self.time_varying_known_reals = ['month', 'quarter', 'delivery_delay']
         self.time_varying_unknown_reals = [self.target]
+        self.feature_names_ = (
+            self.static_categoricals +
+            self.time_varying_known_reals +
+            self.time_varying_unknown_reals +
+            [self.time_idx]
+        )
         logger.info(f"Initialized DeepARModel with max_epochs={self.max_epochs}")
 
-    def create_dataset(self) -> Optional[tuple[TimeSeriesDataSet, TimeSeriesDataSet]]:
+    def create_dataset(self, freq: str = 'M') -> Optional[tuple[TimeSeriesDataSet, TimeSeriesDataSet]]:
         """Create training and validation TimeSeriesDataSets for DeepAR."""
         try:
             df = self.df.copy()
+            df[STANDARD_COLUMNS['date']] = pd.to_datetime(df[STANDARD_COLUMNS['date']])
+            # Create time_idx based on monthly frequency
+            df = df.sort_values([STANDARD_COLUMNS['material'], STANDARD_COLUMNS['date']])
+            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].transform(
+                lambda x: pd.date_range(start=x.min(), end=x.max(), freq=freq).to_series().index
+            )
+            df['month'] = df[STANDARD_COLUMNS['date']].dt.month
+            df['quarter'] = df[STANDARD_COLUMNS['date']].dt.quarter
+            df['delivery_delay'] = df.get(STANDARD_COLUMNS['delivery_date'], df[STANDARD_COLUMNS['date']]) - df[STANDARD_COLUMNS['date']]
+            df['delivery_delay'] = df['delivery_delay'].dt.days.fillna(0).astype('float32')
+
             required_cols = [self.time_idx, self.target] + self.group_ids
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
@@ -50,8 +67,6 @@ class DeepARModel:
             df[self.time_idx] = df[self.time_idx].astype('int64')
             df[self.target] = df[self.target].astype('float32')
             df[self.group_ids[0]] = df[self.group_ids[0]].astype(str)
-            if 'delivery_delay' in df.columns:
-                df['delivery_delay'] = df['delivery_delay'].astype('float32')
 
             # Filter groups with sufficient data
             min_length = MAX_ENCODER_LENGTH + self.prediction_length
@@ -74,7 +89,6 @@ class DeepARModel:
                 return None
 
             # Create training dataset
-            # In the create_dataset method, modify the TimeSeriesDataSet initialization
             training_dataset = TimeSeriesDataSet(
                 train_data,
                 time_idx=self.time_idx,
@@ -98,6 +112,13 @@ class DeepARModel:
                 min_prediction_idx=training_cutoff + 1,
                 stop_randomization=True
             )
+
+            logger.info(f"DeepAR datasets created: {len(training_dataset)} training samples, {len(validation_dataset)} validation samples")
+            return training_dataset, validation_dataset
+        except Exception as e:
+            logger.error(f"DeepAR dataset creation failed: {str(e)}", exc_info=True)
+            st.error(f"DeepAR dataset creation failed: {str(e)}.", icon="🚨")
+            return None
 
             logger.info(f"DeepAR datasets created: {len(training_dataset)} training samples, {len(validation_dataset)} validation samples")
             return training_dataset, validation_dataset
@@ -157,10 +178,20 @@ class DeepARModel:
             df = df.copy()
             max_date = df[STANDARD_COLUMNS['date']].max()
             future_dates = pd.date_range(
-                start=max_date + pd.Timedelta(weeks=1),
+                start=max_date + pd.offsets.MonthBegin(1), # Monthly frequency
                 periods=periods,
-                freq='W'
+                freq='ME'
             )
+
+            # Add time_idx and features for prediction
+            df = df.sort_values([STANDARD_COLUMNS['material'], STANDARD_COLUMNS['date']])
+            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].transform(
+                lambda x: pd.date_range(start=x.min(), end=x.max(), freq='M').to_series().index
+            )
+            df['month'] = df[STANDARD_COLUMNS['date']].dt.month
+            df['quarter'] = df[STANDARD_COLUMNS['date']].dt.quarter
+            df['delivery_delay'] = df.get(STANDARD_COLUMNS['delivery_date'], df[STANDARD_COLUMNS['date']]) - df[STANDARD_COLUMNS['date']]
+            df['delivery_delay'] = df['delivery_delay'].dt.days.fillna(0).astype('float32')
 
             # Prepare prediction dataset
             pred_dataset = TimeSeriesDataSet.from_dataset(

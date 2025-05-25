@@ -26,12 +26,60 @@ class ForecastEngine:
                 return pd.DataFrame()
 
             df = _df.copy()
-            for lag in range(1, lags + 1):
-                df[f'lag_{lag}'] = df[target_col].shift(lag)
-            df['month'] = df[STANDARD_COLUMNS['date']].dt.month
-            df['quarter'] = df[STANDARD_COLUMNS['date']].dt.quarter
-            df['day_of_week'] = df[STANDARD_COLUMNS['date']].dt.dayofweek
-            df['is_weekend'] = df[STANDARD_COLUMNS['date']].dt.dayofweek.isin([5, 6]).astype(int)
+            
+            # Ensure we have a unique index by including material if it exists
+            if STANDARD_COLUMNS['material'] in df.columns:
+                # Create a temporary column for sorting
+                df['_temp_sort'] = df[STANDARD_COLUMNS['date']]
+                # Sort by date and material
+                df = df.sort_values([STANDARD_COLUMNS['material'], '_temp_sort'])
+                # Drop the temporary column
+                df = df.drop(columns=['_temp_sort'])
+                
+                # Process each material separately
+                result_dfs = []
+                for material, group in df.groupby(STANDARD_COLUMNS['material']):
+                    # Now we can safely set the date as index for this group
+                    group_df = group.set_index(STANDARD_COLUMNS['date'])
+                    
+                    # Create lags
+                    for lag in range(1, lags + 1):
+                        group_df[f'lag_{lag}'] = group_df[target_col].shift(lag, freq='ME')
+                    
+                    # Add date-based features
+                    group_df['month'] = group_df.index.month
+                    group_df['quarter'] = group_df.index.quarter
+                    group_df['day_of_week'] = group_df.index.dayofweek
+                    group_df['is_weekend'] = group_df.index.dayofweek.isin([5, 6]).astype(int)
+                    
+                    # Reset index
+                    group_df = group_df.reset_index()
+                    result_dfs.append(group_df)
+                
+                # Combine all processed groups
+                if result_dfs:
+                    df = pd.concat(result_dfs, ignore_index=True)
+                else:
+                    return pd.DataFrame()
+            else:
+                # If no material column, just sort by date
+                df = df.sort_values(STANDARD_COLUMNS['date'])
+                # Set the date column as the index
+                df = df.set_index(STANDARD_COLUMNS['date'])
+                
+                # Create lags
+                for lag in range(1, lags + 1):
+                    df[f'lag_{lag}'] = df[target_col].shift(lag, freq='ME')
+                
+                # Add date-based features
+                df['month'] = df.index.month
+                df['quarter'] = df.index.quarter
+                df['day_of_week'] = df.index.dayofweek
+                df['is_weekend'] = df.index.dayofweek.isin([5, 6]).astype(int)
+                
+                # Reset index
+                df = df.reset_index()
+            
             df.dropna(inplace=True)
             return df
         except Exception as e:
