@@ -215,7 +215,7 @@ def render_central_controls():
 
 def render_data_table():
     """Render data overview in tabs with selection: Monthly Demand, Demand by Country, Top SKUs, and SKU Demand Trend."""
-    st.subheader("Data Overview (Select rows/columns for context)")
+    st.subheader("Data Overview")
     
     data = filter_data(st.session_state.state.data)
     if data is None or data.empty:
@@ -230,25 +230,28 @@ def render_data_table():
     tab1, tab2, tab3, tab4 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs", "SKU Demand Trend"])
 
     with tab1:
-        st.markdown("#### Monthly Demand Overview")
-        try:
-            monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
-            monthly_data[STANDARD_COLUMNS['date']] = pd.to_datetime(monthly_data[STANDARD_COLUMNS['date']]).dt.strftime('%Y-%m')
-            
-            st.dataframe(
-                monthly_data, 
-                use_container_width=True, 
-                key="monthly_demand_df", 
-                on_select="rerun", 
-                selection_mode=["multi-row", "multi-column"]
-            )
-            # Store selection
-            if st.session_state.get("monthly_demand_df"):
-                 st.session_state.data_table_selection = st.session_state.monthly_demand_df.selection
+        with st.expander("📊 Monthly Demand Overview", expanded=True):
+            try:
+                monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), 
+                                        STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
+                monthly_data[STANDARD_COLUMNS['date']] = pd.to_datetime(monthly_data[STANDARD_COLUMNS['date']]).dt.strftime('%Y-%m')
+                
+                st.dataframe(
+                    monthly_data, 
+                    use_container_width=True, 
+                    key="monthly_demand_df", 
+                    on_select="rerun", 
+                    selection_mode=["multi-row", "multi-column"],
+                    height=400
+                )
+                
+                # Store selection
+                if st.session_state.get("monthly_demand_df"):
+                    st.session_state.data_table_selection = st.session_state.monthly_demand_df.selection
 
-        except Exception as e:
-            logger.error(f"Error displaying monthly demand table: {str(e)}")
-            st.error(f"Failed to display monthly demand: {str(e)}.", icon="🚨")
+            except Exception as e:
+                logger.error(f"Error displaying monthly demand table: {str(e)}")
+                st.error(f"Failed to display monthly demand: {str(e)}.", icon="🚨")
 
     with tab2:
         st.markdown("#### Demand by Country")
@@ -305,7 +308,7 @@ def render_data_table():
             logger.error(f"Error creating SKU bar plot: {str(e)}")
             st.error(f"Failed to create SKU bar plot: {str(e)}.", icon="🚨")
 
-    with tab4: # New tab for SKU Demand Trend
+    with tab4:
         st.markdown("#### SKU Demand Trend")
         material_col = STANDARD_COLUMNS['material']
         demand_col = STANDARD_COLUMNS['demand']
@@ -744,7 +747,7 @@ def render_chatbot_interface():
         """
         <div class="chatbot-header">
             <img src="https://img.icons8.com/ios-filled/50/ffffff/bot.png" alt="Bot Icon"/>
-            AI Assistant
+            Depli Chatbot
         </div>
         """,
         unsafe_allow_html=True
