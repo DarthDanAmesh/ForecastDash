@@ -230,7 +230,7 @@ def render_data_table():
     tab1, tab2, tab3, tab4 = st.tabs(["Monthly Demand", "Demand by Country", "Top SKUs", "SKU Demand Trend"])
 
     with tab1:
-        with st.expander("📊 Monthly Demand Overview", expanded=True):
+        with st.expander("📊 Monthly Demand Overview", expanded=False):
             try:
                 monthly_data = data.groupby([pd.Grouper(key=STANDARD_COLUMNS['date'], freq='ME'), 
                                         STANDARD_COLUMNS['material']])[STANDARD_COLUMNS['demand']].sum().reset_index()
@@ -631,6 +631,12 @@ def chat_stream(prompt: str, selection_context: Dict[str, Any]):
         # Be mindful of context length limits for the LLM
         context_str = f"The user has selected the following data context: Rows {selection_context.get('rows')}, Columns {selection_context.get('columns')}. Please consider this context if relevant to the query."
 
+    # Check if the user is asking about the chatbot's identity
+    identity_keywords = ["who are you", "what are you", "tell me about yourself", "your name"]
+    if any(keyword in prompt.lower() for keyword in identity_keywords):
+        yield "I am Depli. A useful Franke Demand Planning Chatbot powered by IBM WatsonX ready to provide Q/A for forecasts and data"
+        return # Stop processing after providing the introduction
+
     full_prompt = f"{context_str}\n\nUser Query: {prompt}"
 
     ollama_api_url = "http://localhost:11434/api/chat" # Default Ollama API endpoint for chat
@@ -640,7 +646,7 @@ def chat_stream(prompt: str, selection_context: Dict[str, Any]):
     payload = {
         "model": model_name,
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant analyzing sales and forecast data."},
+            {"role": "system", "content": "You are a helpful assistant analyzing demand and forecast data."},
             {"role": "user", "content": full_prompt}
         ],
         "stream": True
@@ -771,7 +777,7 @@ def render_chatbot_interface():
                     st.session_state[feedback_session_key] = feedback
                 
                 st.feedback(
-                    type="thumbs",
+                    "thumbs",
                     key=feedback_session_key,
                     on_change=save_feedback,
                     args=[i],
@@ -794,7 +800,7 @@ def render_chatbot_interface():
             response_content = st.write_stream(chat_stream(prompt, active_selection_context))
             
             # Simulate a graph in the response (placeholder for now)
-            st.markdown("📊 *Graph Placeholder: Imagine a trend line here.*")
+            st.markdown("📊 *Click here to see Graph.*")
             
             # Feedback for the new message
             new_message_index = len(st.session_state.history)
