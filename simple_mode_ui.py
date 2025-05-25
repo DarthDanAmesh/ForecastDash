@@ -126,11 +126,10 @@ def show_simple_mode():
             render_central_controls()
             render_data_table()
             render_forecast_section()
-            render_chatbot_interface() # <<< Added chatbot here
-            render_adjustment_wizard()
+            #render_adjustment_wizard()
         with col_right:
             #render_sku_panel()
-            render_feedback_widget()
+            render_chatbot_interface()
 
 def render_mobile_controls():
     """Render mobile-specific controls."""
@@ -752,56 +751,131 @@ def save_feedback(feedback_text: str, rating: str, chat_history: list):
         logger.warning(f"Feedback key {feedback_key} not found in session_state during save_feedback.")
 
 def render_chatbot_interface():
-    st.subheader("💬 Chat with AI Assistant")
+    # Add custom CSS for inspired design
+    st.markdown(
+        """
+        <style>
+        /* Gradient header for the chatbot */
+        .chatbot-header {
+            background: linear-gradient(90deg, #6B48FF, #00DDEB);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .chatbot-header img {
+            width: 24px;
+            height: 24px;
+        }
+        /* Chat container */
+        .chat-container {
+            border: 1px solid #e0e0e0;
+            border-radius: 0 0 10px 10px;
+            padding: 20px;
+            background: #f9f9f9;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        /* User and assistant messages */
+        .stChatMessage.user {
+            background-color: #ffffff;
+            border-radius: 15px;
+            padding: 10px;
+            margin: 10px 0;
+            max-width: 70%;
+            margin-left: auto;
+            border: 1px solid #e0e0e0;
+        }
+        .stChatMessage.assistant {
+            background-color: #E6E6FA;
+            border-radius: 15px;
+            padding: 10px;
+            margin: 10px 0;
+            max-width: 70%;
+            margin-right: auto;
+            border: 1px solid #d0d0ff;
+        }
+        /* Chat input styling */
+        div[data-testid="stChatInput"] {
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+            background: #ffffff;
+            padding: 5px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
+    # Chatbot header
+    st.markdown(
+        """
+        <div class="chatbot-header">
+            <img src="https://img.icons8.com/ios-filled/50/ffffff/bot.png" alt="Bot Icon"/>
+            AI Assistant
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Chat container
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+
+    # Initialize chat history
     if "history" not in st.session_state:
         st.session_state.history = []
 
+    # Display chat history
     for i, message in enumerate(st.session_state.history):
         with st.chat_message(message["role"]):
             st.write(message["content"])
             if message["role"] == "assistant":
                 feedback = message.get("feedback", None)
-                # Ensure feedback key is initialized for current message if not present
                 feedback_session_key = f"feedback_{i}"
                 if feedback_session_key not in st.session_state:
                     st.session_state[feedback_session_key] = feedback
                 
                 st.feedback(
-                    type="thumbs", # Corrected parameter name
-                    key=feedback_session_key, # Use the initialized session key
-                    # disabled=feedback is not None, # This might cause issues if feedback is None initially
+                    type="thumbs",
+                    key=feedback_session_key,
                     on_change=save_feedback,
                     args=[i],
-                    optional_text_label="Provide additional feedback"
                 )
 
-    # Consolidate selection context from different dataframes
-    # You might want a more sophisticated way to manage which selection is active context
+    # Consolidate selection context
     active_selection_context = None
     if st.session_state.get('sku_panel_selection') and (st.session_state.sku_panel_selection.get('rows') or st.session_state.sku_panel_selection.get('columns')):
         active_selection_context = st.session_state.sku_panel_selection
     elif st.session_state.get('data_table_selection') and (st.session_state.data_table_selection.get('rows') or st.session_state.data_table_selection.get('columns')):
         active_selection_context = st.session_state.data_table_selection
 
+    # Chat input
     if prompt := st.chat_input("Ask about the data or forecast..."):
         with st.chat_message("user"):
             st.write(prompt)
         st.session_state.history.append({"role": "user", "content": prompt})
         
         with st.chat_message("assistant"):
-            # Pass the active selection to the chat_stream
             response_content = st.write_stream(chat_stream(prompt, active_selection_context))
             
-            # For feedback on the new message
+            # Simulate a graph in the response (placeholder for now)
+            st.markdown("📊 *Graph Placeholder: Imagine a trend line here.*")
+            
+            # Feedback for the new message
             new_message_index = len(st.session_state.history)
             feedback_key_new = f"feedback_{new_message_index}"
-            st.session_state[feedback_key_new] = None # Initialize feedback for new message
+            st.session_state[feedback_key_new] = None
             st.feedback(
-                type="thumbs", # Corrected parameter name
+                "thumbs",
                 key=feedback_key_new,
                 on_change=save_feedback,
-                args=[new_message_index], # Index for the new assistant message
+                args=[new_message_index],
                 optional_text_label="Provide additional feedback"
             )
         st.session_state.history.append({"role": "assistant", "content": response_content, "feedback": None})
+
+    st.markdown('</div>', unsafe_allow_html=True)
