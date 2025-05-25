@@ -11,3 +11,5 @@ scikit-learn
 xgboost
 statsmodels
 tensorboard
+shap
+ollama

@@ -805,7 +805,6 @@ def render_chatbot_interface():
                 key=feedback_key_new,
                 on_change=save_feedback,
                 args=[new_message_index],
-                optional_text_label="Provide additional feedback"
             )
         st.session_state.history.append({"role": "assistant", "content": response_content, "feedback": None})
 
