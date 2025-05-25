@@ -41,16 +41,17 @@ class DeepARModel:
         )
         logger.info(f"Initialized DeepARModel with max_epochs={self.max_epochs}")
 
-    def create_dataset(self, freq: str = 'M') -> Optional[tuple[TimeSeriesDataSet, TimeSeriesDataSet]]:
+    def create_dataset(self, freq: str = 'ME') -> Optional[tuple[TimeSeriesDataSet, TimeSeriesDataSet]]:
         """Create training and validation TimeSeriesDataSets for DeepAR."""
         try:
             df = self.df.copy()
             df[STANDARD_COLUMNS['date']] = pd.to_datetime(df[STANDARD_COLUMNS['date']])
             # Create time_idx based on monthly frequency
             df = df.sort_values([STANDARD_COLUMNS['material'], STANDARD_COLUMNS['date']])
-            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].transform(
-                lambda x: pd.date_range(start=x.min(), end=x.max(), freq=freq).to_series().index
-            )
+            
+            # Instead of using date_range, create a rank within each group
+            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].rank(method='dense').astype(int) - 1
+            
             df['month'] = df[STANDARD_COLUMNS['date']].dt.month
             df['quarter'] = df[STANDARD_COLUMNS['date']].dt.quarter
             df['delivery_delay'] = df.get(STANDARD_COLUMNS['delivery_date'], df[STANDARD_COLUMNS['date']]) - df[STANDARD_COLUMNS['date']]
@@ -88,13 +89,19 @@ class DeepARModel:
                 st.error("Insufficient data for training and validation.", icon="🚨")
                 return None
 
+            # Create encoders for all categorical variables
+            categorical_encoders = {}
+            for cat_col in self.static_categoricals:
+                if cat_col in df.columns:
+                    categorical_encoders[cat_col] = NaNLabelEncoder(add_nan=True).fit(df[cat_col])
+            
             # Create training dataset
             training_dataset = TimeSeriesDataSet(
                 train_data,
                 time_idx=self.time_idx,
                 target=self.target,
                 group_ids=self.group_ids,
-                categorical_encoders={STANDARD_COLUMNS['material']: NaNLabelEncoder(add_nan=True).fit(df[STANDARD_COLUMNS['material']])},
+                categorical_encoders=categorical_encoders,
                 min_encoder_length=2,
                 max_encoder_length=MAX_ENCODER_LENGTH,
                 max_prediction_length=self.prediction_length,
@@ -167,27 +174,59 @@ class DeepARModel:
             self.model = None
             return False
 
-    def predict(self, df: pd.DataFrame, periods: int) -> Optional[pd.DataFrame]:
-        """Generate forecasts using DeepAR."""
+    def predict(self, df: pd.DataFrame, periods: int = DEFAULT_PREDICTION_LENGTH) -> Optional[pd.DataFrame]:
+        """Generate forecasts for future periods."""
         try:
-            if not self.model or not self.training_dataset:
+            if self.model is None or self.training_dataset is None:
                 logger.error("No trained DeepAR model or dataset available")
                 st.error("No trained DeepAR model available.", icon="🚨")
                 return None
 
             df = df.copy()
+            
+            # Check for unknown categories before attempting prediction
+            unknown_materials = []
+            unknown_countries = []
+            
+            # Check for unknown materials
+            if STANDARD_COLUMNS['material'] in df.columns:
+                material_encoder = self.training_dataset.categorical_encoders.get(STANDARD_COLUMNS['material'])
+                if material_encoder:
+                    known_materials = set(material_encoder.classes_)
+                    for material in df[STANDARD_COLUMNS['material']].unique():
+                        if material not in known_materials:
+                            unknown_materials.append(material)
+            
+            # Check for unknown countries
+            if STANDARD_COLUMNS['country'] in df.columns:
+                country_encoder = self.training_dataset.categorical_encoders.get(STANDARD_COLUMNS['country'])
+                if country_encoder:
+                    known_countries = set(country_encoder.classes_)
+                    for country in df[STANDARD_COLUMNS['country']].unique():
+                        if country not in known_countries:
+                            unknown_countries.append(country)
+            
+            # If unknown categories are found, return None with a warning
+            if unknown_materials or unknown_countries:
+                logger.warning(f"Unknown materials found: {unknown_materials}")
+                logger.warning(f"Unknown countries found: {unknown_countries}")
+                logger.warning("DeepAR cannot reliably forecast for unknown categories. Consider using XGBoost instead.")
+                return None
+                
+            # Continue with normal prediction if all categories are known
             max_date = df[STANDARD_COLUMNS['date']].max()
             future_dates = pd.date_range(
-                start=max_date + pd.offsets.MonthBegin(1), # Monthly frequency
+                start=max_date + pd.offsets.MonthBegin(1),
                 periods=periods,
                 freq='ME'
             )
-
+            
             # Add time_idx and features for prediction
             df = df.sort_values([STANDARD_COLUMNS['material'], STANDARD_COLUMNS['date']])
-            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].transform(
-                lambda x: pd.date_range(start=x.min(), end=x.max(), freq='M').to_series().index
-            )
+            
+            # Use rank method to create integer time indices, consistent with the training approach
+            df['time_idx'] = df.groupby(STANDARD_COLUMNS['material'])[STANDARD_COLUMNS['date']].rank(method='dense').astype(int) - 1
+            
             df['month'] = df[STANDARD_COLUMNS['date']].dt.month
             df['quarter'] = df[STANDARD_COLUMNS['date']].dt.quarter
             df['delivery_delay'] = df.get(STANDARD_COLUMNS['delivery_date'], df[STANDARD_COLUMNS['date']]) - df[STANDARD_COLUMNS['date']]

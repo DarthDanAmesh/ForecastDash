@@ -29,31 +29,29 @@ class ForecastEngine:
             
             # Ensure we have a unique index by including material if it exists
             if STANDARD_COLUMNS['material'] in df.columns:
-                # Create a temporary column for sorting
-                df['_temp_sort'] = df[STANDARD_COLUMNS['date']]
                 # Sort by date and material
-                df = df.sort_values([STANDARD_COLUMNS['material'], '_temp_sort'])
-                # Drop the temporary column
-                df = df.drop(columns=['_temp_sort'])
+                df = df.sort_values([STANDARD_COLUMNS['material'], STANDARD_COLUMNS['date']])
                 
                 # Process each material separately
                 result_dfs = []
                 for material, group in df.groupby(STANDARD_COLUMNS['material']):
-                    # Now we can safely set the date as index for this group
-                    group_df = group.set_index(STANDARD_COLUMNS['date'])
+                    group_df = group.copy()
                     
-                    # Create lags
+                    # Create a rank-based time index within each group
+                    group_df['time_rank'] = group_df[STANDARD_COLUMNS['date']].rank(method='dense').astype(int)
+                    
+                    # Create lags using the rank-based approach instead of frequency-based shifting
                     for lag in range(1, lags + 1):
-                        group_df[f'lag_{lag}'] = group_df[target_col].shift(lag, freq='ME')
+                        group_df[f'lag_{lag}'] = group_df[target_col].shift(lag)
                     
                     # Add date-based features
-                    group_df['month'] = group_df.index.month
-                    group_df['quarter'] = group_df.index.quarter
-                    group_df['day_of_week'] = group_df.index.dayofweek
-                    group_df['is_weekend'] = group_df.index.dayofweek.isin([5, 6]).astype(int)
+                    group_df['month'] = pd.to_datetime(group_df[STANDARD_COLUMNS['date']]).dt.month
+                    group_df['quarter'] = pd.to_datetime(group_df[STANDARD_COLUMNS['date']]).dt.quarter
+                    group_df['day_of_week'] = pd.to_datetime(group_df[STANDARD_COLUMNS['date']]).dt.dayofweek
+                    group_df['is_weekend'] = group_df['day_of_week'].isin([5, 6]).astype(int)
                     
-                    # Reset index
-                    group_df = group_df.reset_index()
+                    # Drop the temporary rank column
+                    group_df = group_df.drop(columns=['time_rank'])
                     result_dfs.append(group_df)
                 
                 # Combine all processed groups
@@ -64,21 +62,22 @@ class ForecastEngine:
             else:
                 # If no material column, just sort by date
                 df = df.sort_values(STANDARD_COLUMNS['date'])
-                # Set the date column as the index
-                df = df.set_index(STANDARD_COLUMNS['date'])
                 
-                # Create lags
+                # Create a rank-based time index
+                df['time_rank'] = df[STANDARD_COLUMNS['date']].rank(method='dense').astype(int)
+                
+                # Create lags using the rank-based approach
                 for lag in range(1, lags + 1):
-                    df[f'lag_{lag}'] = df[target_col].shift(lag, freq='ME')
+                    df[f'lag_{lag}'] = df[target_col].shift(lag)
                 
                 # Add date-based features
-                df['month'] = df.index.month
-                df['quarter'] = df.index.quarter
-                df['day_of_week'] = df.index.dayofweek
-                df['is_weekend'] = df.index.dayofweek.isin([5, 6]).astype(int)
+                df['month'] = pd.to_datetime(df[STANDARD_COLUMNS['date']]).dt.month
+                df['quarter'] = pd.to_datetime(df[STANDARD_COLUMNS['date']]).dt.quarter
+                df['day_of_week'] = pd.to_datetime(df[STANDARD_COLUMNS['date']]).dt.dayofweek
+                df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
                 
-                # Reset index
-                df = df.reset_index()
+                # Drop the temporary rank column
+                df = df.drop(columns=['time_rank'])
             
             df.dropna(inplace=True)
             return df
@@ -90,40 +89,41 @@ class ForecastEngine:
     @staticmethod
     def forecast(df: pd.DataFrame, forecast_horizon: int = DEFAULT_PREDICTION_LENGTH, 
                  freq: str = DEFAULT_FREQ) -> Optional[dict]:
-        """Generate forecasts using DeepAR, falling back to XGBoost if DeepAR fails. Returns dict for SHAP explainability."""
+        """Generate forecasts using DeepAR, falling back to XGBoost if DeepAR fails or encounters unknown categories."""
         try:
             if df.empty or STANDARD_COLUMNS['material'] not in df.columns:
                 logger.error("Invalid input: DataFrame empty or material column missing")
                 st.error("Data must include material column for SKU-level forecasting.", icon="🚨")
                 return None
 
-            
-
-            # Try DeepAR
+            # Try DeepAR first
             deepar_params = {
                 'max_epochs': 10,
                 'batch_size': 32,
                 'prediction_length': forecast_horizon
             }
             deepar_model = ModelTrainer.train_deepar(df, deepar_params)
+            
             if deepar_model:
-                forecasts = deepar_model.predict(df, periods=forecast_horizon)
-                if forecasts is not None and not forecasts.empty:
+                # Split data by known/unknown categories if DeepAR model is available
+                deepar_forecasts = deepar_model.predict(df, periods=forecast_horizon)
+                
+                if deepar_forecasts is not None and not deepar_forecasts.empty:
                     logger.info("DeepAR forecast generated successfully")
-                    # Assume DeepARModel exposes feature names used for training
                     feature_names = getattr(deepar_model, 'feature_names_', None)
-                    # For SHAP, use the same features as training (excluding target)
                     features_for_shap = df.drop(columns=[STANDARD_COLUMNS['demand']]) if STANDARD_COLUMNS['demand'] in df.columns else df
                     return {
-                        'forecast': forecasts,
+                        'forecast': deepar_forecasts,
                         'model': deepar_model,
                         'features': features_for_shap,
                         'model_type': 'deepar',
                         'feature_names': feature_names
                     }
-
-            # Fallback to XGBoost
-            st.warning("DeepAR failed, falling back to XGBoost.", icon="⚠️")
+                else:
+                    logger.warning("DeepAR couldn't generate forecasts, possibly due to unknown categories")
+                
+                # Fallback to XGBoost
+                st.warning("DeepAR failed or encountered unknown categories, using XGBoost instead.", icon="⚠️")
             # Create features for XGBoost
             df_feat = ForecastEngine.create_features(df, target_col=STANDARD_COLUMNS['demand'])
             if df_feat.empty:

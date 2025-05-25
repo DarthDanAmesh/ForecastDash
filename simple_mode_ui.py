@@ -275,6 +275,8 @@ def render_data_table():
                     st.dataframe(country_summary, key="country_summary_df", on_select="rerun", selection_mode=["multi-row"])
                     if st.session_state.get("country_summary_df"):
                         st.session_state.data_table_selection = st.session_state.country_summary_df.selection
+                    if st.session_state.get("country_summary_df"):
+                        st.session_state.data_table_selection = st.session_state.country_summary_df.selection
 
             except Exception as e:
                 logger.error(f"Error creating country bar plot: {str(e)}")
@@ -419,6 +421,14 @@ def render_forecast_section():
         st.warning("Forecast is frozen. Uncheck 'Freeze Forecast' to generate a new forecast.", icon="⚠️")
         return
     
+    # Check if filters have changed since last forecast
+    if st.session_state.get('forecast_generated', False) and filters_changed():
+        st.warning("Filters have changed since the last forecast. Please regenerate the forecast for updated results.", icon="⚠️")
+        if st.button("Regenerate Forecast", type="primary"):
+            # Reset forecast_generated to trigger new forecast
+            st.session_state.forecast_generated = False
+            st.rerun()
+    
     if st.session_state.get('forecast_generated', False) and "DeepAR" in st.session_state.state.forecasts:
         display_forecast(st.session_state.state.data, st.session_state.state.forecasts["DeepAR"])
         return
@@ -454,6 +464,9 @@ def render_forecast_section():
                 
                 st.session_state.state.forecasts["DeepAR"] = forecast_df
                 st.session_state.forecast_generated = True
+                # Save current filter state for future comparison
+                save_filter_state()
+                
                 logger.info(f"Forecast DataFrame columns: {list(forecast_df.columns)}")
                 display_forecast(data, forecast_df)
                 st.success("Forecast generated successfully!", icon="✅")
@@ -794,3 +807,38 @@ def render_chatbot_interface():
         st.session_state.history.append({"role": "assistant", "content": response_content, "feedback": None})
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+# Add this function to track filter state when forecast is generated
+def save_filter_state():
+    """Save the current filter state for comparison."""
+    st.session_state.last_forecast_filters = {
+        'materials': st.session_state.filters.get('materials', []).copy() if isinstance(st.session_state.filters.get('materials', []), list) else [],
+        'countries': st.session_state.filters.get('countries', []).copy() if isinstance(st.session_state.filters.get('countries', []), list) else [],
+        'date_range': st.session_state.date_range if 'date_range' in st.session_state else None
+    }
+
+# Add this function to check if filters have changed
+def filters_changed():
+    """Check if filters have changed since last forecast generation."""
+    if 'last_forecast_filters' not in st.session_state:
+        return False
+    
+    last_filters = st.session_state.last_forecast_filters
+    current_materials = st.session_state.filters.get('materials', [])
+    current_countries = st.session_state.filters.get('countries', [])
+    current_date_range = st.session_state.date_range if 'date_range' in st.session_state else None
+    
+    # Compare materials
+    if set(last_filters['materials']) != set(current_materials):
+        return True
+    
+    # Compare countries
+    if set(last_filters['countries']) != set(current_countries):
+        return True
+    
+    # Compare date ranges
+    if last_filters['date_range'] != current_date_range:
+        return True
+    
+    return False
