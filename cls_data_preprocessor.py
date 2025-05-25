@@ -327,3 +327,27 @@ class DataProcessor:
             logger.error(f"Time series preparation failed: {str(e)}")
             st.error(f"Error preparing time series: {str(e)}.", icon="🚨")
             return None
+
+    def integrate_material_metadata(df: pd.DataFrame, metadata_file: str = None) -> pd.DataFrame:
+        """Integrate material metadata with the main dataset."""
+        if metadata_file is None or not os.path.exists(metadata_file):
+            return df
+        
+        try:
+            metadata = pd.read_csv(metadata_file)
+            if STANDARD_COLUMNS['material'] not in metadata.columns:
+                logger.warning(f"Material column not found in metadata file")
+                return df
+            
+            # Merge metadata with main dataframe
+            result = df.merge(
+                metadata,
+                on=STANDARD_COLUMNS['material'],
+                how='left'
+            )
+            
+            logger.info(f"Added {len(metadata.columns) - 1} metadata columns")
+            return result
+        except Exception as e:
+            logger.error(f"Error integrating material metadata: {str(e)}")
+            return df

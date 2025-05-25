@@ -131,3 +131,47 @@ def display_kpis():
                   delta=f"{mom_change:.1f}%",
                   delta_color="normal" if mom_change >= 0 else "inverse",
                   help="Change in total monthly sales compared to last full month.")
+
+
+def plot_material_comparison(forecast_df: pd.DataFrame, selected_materials: list):
+    """Plot comparison of forecasts for selected materials."""
+    st.subheader("Material Forecast Comparison")
+    
+    if forecast_df.empty or STANDARD_COLUMNS['material'] not in forecast_df.columns:
+        st.warning("No forecast data available for comparison.")
+        return
+    
+    # Filter for selected materials
+    if selected_materials:
+        comparison_df = forecast_df[forecast_df[STANDARD_COLUMNS['material']].isin(selected_materials)]
+    else:
+        # Get top 5 materials by forecast volume
+        top_materials = forecast_df.groupby(STANDARD_COLUMNS['material'])['forecast'].sum().nlargest(5).index
+        comparison_df = forecast_df[forecast_df[STANDARD_COLUMNS['material']].isin(top_materials)]
+    
+    if comparison_df.empty:
+        st.warning("No data available for the selected materials.")
+        return
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add a line for each material
+    for material in comparison_df[STANDARD_COLUMNS['material']].unique():
+        material_data = comparison_df[comparison_df[STANDARD_COLUMNS['material']] == material]
+        fig.add_trace(go.Scatter(
+            x=material_data['date'],
+            y=material_data['forecast'],
+            name=material,
+            mode='lines+markers'
+        ))
+    
+    fig.update_layout(
+        title="Forecast Comparison by Material",
+        xaxis_title="Date",
+        yaxis_title="Forecast Demand",
+        legend_title="Material",
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)

@@ -51,5 +51,53 @@ def enhance_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
         df['delivery_delay'] = 0
         logger.info("Set delivery_delay to 0 (missing date columns)")
 
+    # Add material categorization features
+    material_col = STANDARD_COLUMNS['material']
+    if material_col in df.columns:
+        try:
+            # Extract product family from material code (assuming first 3 chars represent family)
+            df['material_family'] = df[material_col].astype(str).str[:3]
+            
+            # Create material frequency feature (how common is this material)
+            material_counts = df[material_col].value_counts()
+            df['material_frequency'] = df[material_col].map(material_counts)
+            
+            logger.info("Added material categorization features")
+        except Exception as e:
+            logger.error(f"Error creating material features: {str(e)}")
+            st.warning("Error creating material-based features.", icon="⚠️")
+    
+    return df
     logger.info(f"Added features: {set(df.columns) - set(df.columns)}")
+    return df
+
+
+def add_material_similarity_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add features based on material demand pattern similarity."""
+    material_col = STANDARD_COLUMNS['material']
+    date_col = STANDARD_COLUMNS['date']
+    demand_col = STANDARD_COLUMNS['demand']
+    
+    if not all(col in df.columns for col in [material_col, date_col, demand_col]):
+        return df
+    
+    # Create pivot table of materials by date
+    pivot = df.pivot_table(index=date_col, columns=material_col, values=demand_col, aggfunc='sum')
+    
+    # Fill NAs and normalize
+    pivot = pivot.fillna(0)
+    normalized = pivot / pivot.max()
+    
+    # Calculate correlation matrix
+    corr_matrix = normalized.corr()
+    
+    # For each material, find top 3 most similar materials
+    similar_materials = {}
+    for material in corr_matrix.columns:
+        similar = corr_matrix[material].sort_values(ascending=False)[1:4]  # Skip self (1.0)
+        similar_materials[material] = similar.index.tolist()
+    
+    # Add to original dataframe
+    df['similar_material_1'] = df[material_col].map(lambda x: similar_materials.get(x, [None])[0] if x in similar_materials and len(similar_materials[x]) > 0 else None)
+    
     return df

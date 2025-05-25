@@ -87,6 +87,36 @@ def detect_sales_anomalies(df: pd.DataFrame, window: int = 3, sigma: float = 2.0
         logger.exception("Anomaly detection error")
         return None
 
+def detect_material_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect anomalies in material demand patterns."""
+    material_col = STANDARD_COLUMNS['material']
+    date_col = STANDARD_COLUMNS['date']
+    demand_col = STANDARD_COLUMNS['demand']
+    
+    if not all(col in df.columns for col in [material_col, date_col, demand_col]):
+        return df
+    
+    result_df = df.copy()
+    result_df['is_anomaly'] = False
+    
+    # Process each material separately
+    for material, group in df.groupby(material_col):
+        if len(group) < 5:  # Skip materials with too few data points
+            continue
+            
+        # Calculate rolling mean and standard deviation
+        rolling_mean = group[demand_col].rolling(window=3, min_periods=1).mean()
+        rolling_std = group[demand_col].rolling(window=3, min_periods=1).std().fillna(group[demand_col].std())
+        
+        # Mark anomalies (demand > 3 standard deviations from mean)
+        threshold = 3
+        anomalies = abs(group[demand_col] - rolling_mean) > (threshold * rolling_std)
+        
+        # Update the result dataframe
+        result_df.loc[group.index[anomalies], 'is_anomaly'] = True
+    
+    return result_df
+
 def plot_anomalies(anomalies: pd.DataFrame, forecast: pd.DataFrame = None, title: str = "SKU Demand Anomaly Detection") -> Optional[go.Figure]:
     """Create SKU-level anomaly plot with optional forecast overlay."""
     if anomalies is None or anomalies.empty:
