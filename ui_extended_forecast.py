@@ -40,6 +40,11 @@ def show_extended_forecasting():
                 ts = DataProcessor.prepare_time_series(df)  # Fallback to delivery-based
                 st.info("Using delivery based time series (Act. Gds Issue Date)")
             
+            # Initialize forecast variable
+            forecast = None
+            lower_bound = None
+            upper_bound = None
+
             if model_type == "XGBoost":
                 last_date = DataProcessor.prepare_time_series(df).index[-1]
                 forecast = ForecastEngine.forecast_xgboost(
@@ -67,40 +72,45 @@ def show_extended_forecasting():
                 lower_bound = forecast * (1 - max(error_margin, 0.1))
                 upper_bound = forecast * (1 + max(error_margin, 0.1))
             
+            # Add a check to ensure forecast was generated
+            if forecast is None:
+                st.error(f"Forecast generation failed or model type '{model_type}' is not supported for extended forecasting.", icon="🚨")
+                return # Exit the function if forecast is not generated
+
             st.session_state.state.forecasts[model_type] = forecast
-            
+
             # Show forecast
             st.subheader("12-Month Demand Forecast")
-            
+
             # Create forecast plot with confidence intervals
             fig = px.line(ts, title="Extended Demand Forecast (12 Months)")
             fig.add_scatter(x=forecast.index, y=forecast.values, name='Forecast')
-            
-            if show_confidence:
-                fig.add_scatter(x=forecast.index, 
-                                y=upper_bound, 
+
+            if show_confidence and lower_bound is not None and upper_bound is not None:
+                fig.add_scatter(x=forecast.index,
+                                y=upper_bound,
                                name=f'Upper Bound ({confidence_level}%)',
                                line=dict(dash='dash', color='lightgreen'))
-                fig.add_scatter(x=forecast.index, y=lower_bound, 
+                fig.add_scatter(x=forecast.index, y=lower_bound,
                                name=f'Lower Bound ({confidence_level}%)',
                                line=dict(dash='dash', color='lightcoral'),
                                fill='tonexty',
                                fillcolor='rgba(255, 204, 204, 0.2)'
                                )
-            
+
             st.plotly_chart(fig)
-            
+
             # Show forecast values in a table
             forecast_df = pd.DataFrame({
                 'Date': forecast.index,
                 'Forecast': forecast.values
             })
-            
-            if show_confidence:
+
+            if show_confidence and lower_bound is not None and upper_bound is not None:
                 # Ensure these have the same length as forecast
                 forecast_df['Lower_Bound'] = lower_bound.values if hasattr(lower_bound, 'values') else lower_bound
                 forecast_df['Upper_Bound'] = upper_bound.values if hasattr(upper_bound, 'values') else upper_bound
 
-            
+
             st.write("Extended Forecast Values:")
             st.dataframe(forecast_df)
