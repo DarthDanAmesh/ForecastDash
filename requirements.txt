@@ -13,3 +13,4 @@ statsmodels
 tensorboard
 shap
 ollama
+torch
